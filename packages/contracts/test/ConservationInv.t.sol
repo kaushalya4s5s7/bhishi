@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test, StdInvariant} from "forge-std/Test.sol";
+import {Test, StdInvariant, console} from "forge-std/Test.sol";
 import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
@@ -10,6 +10,27 @@ import {MockStable} from "../src/MockStable.sol";
 /// @notice Handler that drives Circle state transitions for invariant testing.
 ///         The invariant: circle.balanceOf == totalClaimable + dustAccrued + undrawnPools
 ///         at every point in the lifecycle.
+///
+///         Two families of actions are exposed to the fuzzer:
+///
+///         1. Fine-grained actions (join/commit/reveal/slash/...) — these let
+///            the fuzzer interleave individual FSM steps in arbitrary orders,
+///            catching odd partial-state sequences a scripted test wouldn't try.
+///
+///         2. A single guided `driveRound` action — this completes an entire
+///            round (join everyone still needed, commit everyone, advance,
+///            reveal everyone, request+fulfill the draw) in one call. It exists
+///            because the deep states of this FSM (REVEAL / DRAW / dividend
+///            distribution) are practically unreachable by a pure random walk:
+///            Foundry reverts handler+EVM storage to the post-setUp snapshot
+///            before EACH run, and reaching REVEAL requires a specific ~7-step
+///            ordering (3 joins → 3 commits → advance → reveals) that almost
+///            never lands within one run's call budget. Empirically, without a
+///            guided driver the fuzzer got at most ONE actor joined per run and
+///            never once reached COMMIT, let alone REVEAL — so the AUCTION
+///            bid/cap/tie/dividend money-path was never exercised at all. The
+///            guided driver makes those paths reachable while the fuzzer still
+///            controls the bids (via `bidSeed`) and the draw randomness.
 contract CircleHandler is Test {
     Circle      public circle;
     MockStable  public stable;
@@ -26,6 +47,18 @@ contract CircleHandler is Test {
     // replayed exactly at reveal() time (reveal checks the commitment hash).
     mapping(address => uint256) public pendingBid;
     uint256 public callCount;
+
+    // Coverage counters. NOTE: these reset to zero at the start of every
+    // invariant *run* (Foundry snapshots storage post-setUp and reverts to it
+    // between runs — verified empirically), so they only ever reflect a single
+    // run's activity. The campaign-wide accumulation that the regression guard
+    // asserts on is done in ConservationInvAuctionTest via the filesystem,
+    // which is the only cheatcode-accessible state that survives the per-run
+    // snapshot revert.
+    uint256 public revealSuccessCount;
+    uint256 public revealRevertCount;
+    uint256 public capRevertCount;
+    uint256 public roundsDriven;
 
     constructor(Circle _circle, MockStable _stable) {
         circle = _circle;
@@ -44,8 +77,6 @@ contract CircleHandler is Test {
         return circle.mode() == Mode.AUCTION;
     }
 
-    // ── handlers ──────────────────────────────────────────────────────────────
-
     function _isJoined(address m) internal view returns (bool) {
         (bool joined,,,) = circle.memberInfo(m);
         return joined;
@@ -55,8 +86,154 @@ contract CircleHandler is Test {
         (,,, c) = circle.memberInfo(m);
     }
 
+    function _state() internal view returns (uint256) {
+        return uint256(circle.state());
+    }
+
+    // ── guided full-round driver ────────────────────────────────────────────
+    /// @notice Drive one complete round from wherever the FSM currently is.
+    ///         `bidSeed` selects a per-round bid pattern (AUCTION only) so the
+    ///         cap-boundary, over-cap, zero-bid, and forced-tie code paths all
+    ///         get exercised across the campaign. Every step is try/catch'd so
+    ///         a deliberately-reverting bid (cap+1) doesn't abort the walk; the
+    ///         conservation invariant is still checked by the test between the
+    ///         individual state mutations that this driver triggers is not the
+    ///         point — the invariant is re-asserted after this whole call, and
+    ///         (more importantly) after every fine-grained action too.
+    function driveRound(uint256 bidSeed) external {
+        // 1. Make sure everyone has joined (FILLING → COMMIT once seats full).
+        if (_state() == uint256(Circle.State.FILLING)) {
+            for (uint256 i = 0; i < actors.length; i++) {
+                address m = actors[i];
+                if (_isJoined(m)) continue;
+                vm.prank(m);
+                try circle.join() {} catch {}
+            }
+        }
+
+        // 2. COMMIT phase: every non-winner commits a bid; past winners are
+        //    auto-advanced by the contract and must NOT be committed here.
+        if (_state() != uint256(Circle.State.COMMIT)) return;
+
+        // Cap is 40% of the FINAL round pool. In COMMIT, roundPool is still
+        // being accumulated as each member commits their fixed contribution,
+        // so we compute the cap from the deterministic final pool (count of
+        // members still bidding this round * contribution) rather than the
+        // in-flight roundPool(), otherwise early committers would see an
+        // understated cap and the cap-boundary cases would be wrong.
+        uint256 bidders = 0;
+        for (uint256 i = 0; i < actors.length; i++) {
+            if (!circle.hasWon(actors[i])) bidders++;
+        }
+        uint256 pool = bidders * CONTRIB;
+        uint256 cap  = (pool * circle.MAX_BID_DISCOUNT_BPS()) / 10000;
+
+        // Per-round bid pattern. Arms are chosen to cover the risk areas the
+        // AUCTION logic must handle:
+        //   0: everyone bids exactly at cap        (all-tied at the max)
+        //   1: everyone bids 0                      (no-bid VRF fallback)
+        //   2: distinct increasing bids            (unique highest winner)
+        //   3: two tie at cap, rest lower          (tie → restricted VRF)
+        //   4: first bidder over cap (must revert), rest valid distinct bids
+        //
+        // Round 0 of every fresh circle is FORCED to arm 4. Because Foundry
+        // reverts handler+EVM storage to the post-setUp snapshot between runs,
+        // every run starts at currentRound 0 — so pinning arm 4 there
+        // guarantees the over-cap BidExceedsCap revert path is exercised on
+        // essentially every run that reaches REVEAL, rather than depending on
+        // a 1-in-5 seed roll coinciding with a round that happens to complete
+        // (which, with only ~1 completed round per run, almost never happened
+        // and left capRevertCount at 0 campaign-wide). Later rounds use the
+        // seed-driven arm so cap/zero/tie/unique-winner variety is still fuzzed.
+        uint256 arm = circle.currentRound() == 0 ? 4 : (bidSeed % 5);
+
+        uint256 committedBidders = 0;
+        for (uint256 i = 0; i < actors.length; i++) {
+            address m = actors[i];
+            if (circle.hasWon(m)) continue;          // auto-advanced past winner
+            if (circle.committed(m)) continue;
+
+            uint256 bid;
+            if (arm == 0) {
+                bid = cap;
+            } else if (arm == 1) {
+                bid = 0;
+            } else if (arm == 2) {
+                // Distinct increasing bids, all within cap.
+                bid = cap == 0 ? 0 : (cap * (committedBidders + 1)) / (bidders + 1);
+            } else if (arm == 3) {
+                // First two tie at cap; remainder bid lower (half cap).
+                bid = committedBidders < 2 ? cap : cap / 2;
+            } else {
+                // arm == 4: the first bidder attempts cap+1 (must revert on
+                // reveal), the rest bid distinct valid amounts.
+                bid = committedBidders == 0 ? cap + 1 : (cap == 0 ? 0 : (cap * (committedBidders)) / (bidders + 1));
+            }
+
+            pendingBid[m] = bid;
+            bytes32 c = keccak256(abi.encodePacked(bid, SALT, m));
+            vm.prank(m);
+            try circle.commit(c) {} catch {}
+            committedBidders++;
+        }
+
+        // 3. Advance COMMIT → REVEAL.
+        try circle.advanceToReveal() {} catch {}
+        if (_state() != uint256(Circle.State.REVEAL)) return;
+
+        // 4. REVEAL: every non-winner reveals their pending bid. An over-cap
+        //    bid (arm 4's first bidder) reverts with BidExceedsCap here — that
+        //    member stays un-revealed and will be slashable, which is itself a
+        //    valid state the invariant must hold through.
+        for (uint256 i = 0; i < actors.length; i++) {
+            address m = actors[i];
+            if (circle.hasWon(m)) continue;
+            if (!circle.committed(m)) continue;
+            if (circle.revealed(m)) continue;
+            vm.prank(m);
+            try circle.reveal(pendingBid[m], SALT) {
+                revealSuccessCount++;
+            } catch (bytes memory reason) {
+                revealRevertCount++;
+                if (reason.length >= 4 && bytes4(reason) == Circle.BidExceedsCap.selector) {
+                    capRevertCount++;
+                }
+            }
+        }
+
+        // 5. If a bid was rejected (arm 4), the offender never revealed, so the
+        //    round is stuck in REVEAL until slashed. Slash them so the draw can
+        //    proceed and the round completes (exercising the slash+auction
+        //    interaction under conservation).
+        if (_state() == uint256(Circle.State.REVEAL)) {
+            vm.warp(block.timestamp + circle.REVEAL_WINDOW() + 1);
+            for (uint256 i = 0; i < actors.length; i++) {
+                address m = actors[i];
+                if (circle.hasWon(m)) continue;
+                if (circle.revealed(m)) continue;
+                if (!_isJoined(m)) continue;
+                try circle.slash(m) {} catch {}
+            }
+        }
+
+        // 6. DRAW: request + fulfill. Randomness derived from the seed so the
+        //    VRF tie-break / no-bid fallback picks vary across the campaign.
+        if (_state() == uint256(Circle.State.DRAW)) {
+            try circle.requestDraw() {} catch {}
+            if (circle.drawRequestedAt() != 0) {
+                try circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked(bidSeed, callCount))), "") {
+                    roundsDriven++;
+                } catch {}
+            }
+        }
+
+        callCount++;
+    }
+
+    // ── fine-grained handlers (arbitrary interleaving coverage) ──────────────
+
     function join(uint256 actorIdx) external {
-        if (uint256(circle.state()) != uint256(Circle.State.FILLING)) return;
+        if (_state() != uint256(Circle.State.FILLING)) return;
         actorIdx = actorIdx % actors.length;
         address m = actors[actorIdx];
         if (_isJoined(m)) return;
@@ -65,52 +242,22 @@ contract CircleHandler is Test {
     }
 
     function commit(uint256 actorIdx, uint256 bidSeed) external {
-        callCount++;
-        if (uint256(circle.state()) != uint256(Circle.State.COMMIT)) return;
+        if (_state() != uint256(Circle.State.COMMIT)) return;
         actorIdx = actorIdx % actors.length;
         address m = actors[actorIdx];
         if (!_isJoined(m)) return;
+        if (circle.hasWon(m)) return;
         if (circle.committed(m)) return;
 
         uint256 amount;
         if (_isAuction()) {
-            // Mode-aware bid selection: exercise cap edges, ties, zero bids,
-            // and mixed zero/positive bids across fuzz runs — not one fixed
-            // happy-path bid.
-            //
-            // IMPORTANT: reveal()'s cap check uses roundPool() *at reveal
-            // time*, i.e. the FINAL pool once every active member has
-            // committed their fixed `contribution` — not the partial pool
-            // visible while commits are still trickling in. Using the
-            // in-flight roundPool() here would understate the cap for
-            // early committers and silently defeat the "cap+1 must revert"
-            // and "exactly at cap must succeed" cases. Anchor on the
-            // maximum possible final pool instead (all joined members'
-            // fixed contribution), which is exactly what roundPool() will
-            // equal by the time reveal() runs (commit doesn't add bids to
-            // the pool, only the fixed `contribution`).
-            uint256 pool = actors.length * CONTRIB;
-            uint256 cap  = (pool * circle.MAX_BID_DISCOUNT_BPS()) / 10000;
-
-            uint256 pattern = bidSeed % 6;
-            if (callCount % 3 == 0) {
-                // Forced multi-way tie: fixed bid value independent of seed,
-                // driven by the fuzzer's own call sequence.
-                amount = cap / 2;
-            } else if (pattern == 0) {
-                // Exactly at the cap.
-                amount = cap;
-            } else if (pattern == 1) {
-                // One wei over the cap — must revert with BidExceedsCap.
-                amount = cap + 1;
-            } else if (pattern == 2 || pattern == 3) {
-                // Zero bid.
-                amount = 0;
-            } else {
-                // Arbitrary bid within [0, cap] (mixed zero/positive rounds
-                // emerge naturally as different actors hit different arms).
-                amount = cap == 0 ? 0 : bidSeed % (cap + 1);
+            uint256 bidders = 0;
+            for (uint256 i = 0; i < actors.length; i++) {
+                if (!circle.hasWon(actors[i])) bidders++;
             }
+            uint256 pool = bidders * CONTRIB;
+            uint256 cap  = (pool * circle.MAX_BID_DISCOUNT_BPS()) / 10000;
+            amount = cap == 0 ? 0 : bidSeed % (cap + 2); // may exceed cap by 1 → revert path
             pendingBid[m] = amount;
         } else {
             amount = CONTRIB;
@@ -122,12 +269,12 @@ contract CircleHandler is Test {
     }
 
     function advanceToReveal() external {
-        if (uint256(circle.state()) != uint256(Circle.State.COMMIT)) return;
+        if (_state() != uint256(Circle.State.COMMIT)) return;
         try circle.advanceToReveal() {} catch {}
     }
 
     function reveal(uint256 actorIdx) external {
-        if (uint256(circle.state()) != uint256(Circle.State.REVEAL)) return;
+        if (_state() != uint256(Circle.State.REVEAL)) return;
         actorIdx = actorIdx % actors.length;
         address m = actors[actorIdx];
         if (!_isJoined(m)) return;
@@ -135,15 +282,7 @@ contract CircleHandler is Test {
         if (circle.revealed(m)) return;
 
         uint256 amount = _isAuction() ? pendingBid[m] : CONTRIB;
-
         vm.prank(m);
-        // NOTE: try/catch swallows reverts (including a deliberately
-        // over-cap bid reverting with BidExceedsCap) so a single bad action
-        // doesn't kill the whole fuzz run. This is intentional and mirrors
-        // the existing pattern used throughout this handler — invalid
-        // actions are attempted-and-skipped, not filtered out beforehand,
-        // so the revert path is genuinely exercised by the EVM on every run.
-        revealAttempts++;
         try circle.reveal(amount, SALT) {
             revealSuccessCount++;
         } catch (bytes memory reason) {
@@ -154,18 +293,8 @@ contract CircleHandler is Test {
         }
     }
 
-    uint256 public revealAttempts;
-    uint256 public revealSuccessCount;
-    uint256 public revealRevertCount;
-    uint256 public capRevertCount;
-
-    function slash(uint256 actorIdx, uint256 gateSeed) external {
-        if (uint256(circle.state()) != uint256(Circle.State.REVEAL)) return;
-        // Gate the timeout-triggering warp so it doesn't fire on nearly every
-        // call: this gives the FSM many chances to have every active member
-        // reveal() before a stray warp forces an abort. The gate still lets
-        // the warp fire (1-in-20) so the slash/timeout path stays covered.
-        if (gateSeed % 20 != 0) return;
+    function slash(uint256 actorIdx) external {
+        if (_state() != uint256(Circle.State.REVEAL)) return;
         actorIdx = actorIdx % actors.length;
         address defaulter = actors[actorIdx];
         if (!_isJoined(defaulter)) return;
@@ -175,19 +304,19 @@ contract CircleHandler is Test {
     }
 
     function requestDraw() external {
-        if (uint256(circle.state()) != uint256(Circle.State.DRAW)) return;
+        if (_state() != uint256(Circle.State.DRAW)) return;
         if (circle.drawRequestedAt() != 0) return;
         try circle.requestDraw() {} catch {}
     }
 
     function fulfillRandomness(uint256 rand) external {
-        if (uint256(circle.state()) != uint256(Circle.State.DRAW)) return;
+        if (_state() != uint256(Circle.State.DRAW)) return;
         if (circle.drawRequestedAt() == 0) return;
         try circle.fulfillRandomness(0, rand, "") {} catch {}
     }
 
     function reclaimOnStall() external {
-        if (uint256(circle.state()) != uint256(Circle.State.DRAW)) return;
+        if (_state() != uint256(Circle.State.DRAW)) return;
         if (circle.drawRequestedAt() == 0) return;
         vm.warp(block.timestamp + circle.VRF_TIMEOUT() + 1);
         try circle.reclaimOnStall() {} catch {}
@@ -201,15 +330,8 @@ contract CircleHandler is Test {
         try circle.claim() {} catch {}
     }
 
-    function refundFilling(uint256 gateSeed) external {
-        if (uint256(circle.state()) != uint256(Circle.State.FILLING)) return;
-        // Same gating rationale as slash(): without this, the fuzzer warps
-        // past FILLING to ABORTED_FILLING almost immediately on essentially
-        // every campaign (join() needs 3 separate calls to land first),
-        // so COMMIT/REVEAL/DRAW are never reached. Gate to 1-in-20 so join()
-        // has room to complete across the other ~19/20 calls first, while
-        // still eventually covering the FILLING-timeout/refund path.
-        if (gateSeed % 20 != 0) return;
+    function refundFilling() external {
+        if (_state() != uint256(Circle.State.FILLING)) return;
         vm.warp(block.timestamp + circle.FILLING_TIMEOUT() + 1);
         try circle.refundFilling() {} catch {}
     }
@@ -238,32 +360,11 @@ contract ConservationInvTest is StdInvariant, Test {
         targetContract(address(handler));
     }
 
-    function _checkConservation(Circle c) internal view {
-        uint256 contractBal  = stable.balanceOf(address(c));
-        uint256 totalClaims  = c.totalClaimable();
-        uint256 dust         = c.dustAccrued();
-        uint256 undrawn      = c.undrawnPools();
-
-        uint256 totalBonds = 0;
-        uint256 n = c.memberCount();
-        for (uint256 i = 0; i < n; i++) {
-            address m = c.members(i);
-            (bool joined, uint256 stakedBond,,) = c.memberInfo(m);
-            if (joined) totalBonds += stakedBond;
-        }
-
-        assertEq(
-            contractBal,
-            totalClaims + dust + undrawn + totalBonds,
-            "conservation invariant violated"
-        );
-    }
-
     /// @notice Conservation invariant:
-    ///         contract token balance == totalClaimable + dustAccrued + undrawnPools
+    ///         contract token balance == totalClaimable + dustAccrued + undrawnPools + bonds
     ///
     ///         This holds through every state transition because:
-    ///         - join()       : bond enters → stakedBond (tracked in claimable on exit)
+    ///         - join()       : bond enters → stakedBond
     ///         - commit()     : contribution enters → roundPool
     ///         - slash()      : bond redistributed to claimable / roundPool / dustAccrued
     ///         - fulfillRandomness(): roundPool → winner.claimable, bonds → claimable
@@ -271,7 +372,7 @@ contract ConservationInvTest is StdInvariant, Test {
     ///         - claim()      : claimable exits → token leaves contract
     ///         Dust is released to first member on COMPLETED.
     function invariant_balanceEqualsClaims() public view {
-        _checkConservation(circle);
+        _checkConservation(circle, stable);
     }
 }
 
@@ -288,6 +389,27 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
     uint256 constant SEATS   = 3;
     uint256 constant BOND    = (SEATS - 1) * CONTRIB;
 
+    // ── campaign-wide coverage accumulator (see rationale below) ─────────────
+    //
+    // Foundry reverts handler+EVM storage to the post-setUp() snapshot before
+    // each independent invariant *run* within the campaign (verified with a
+    // dedicated probe: a handler counter bumped on every call reads 500 — one
+    // run's depth — at afterInvariant(), not 128_000). So:
+    //   - handler.revealSuccessCount() only ever reflects the LAST run.
+    //   - afterInvariant() fires exactly ONCE, after the last run.
+    // A direct assertion on handler counters in afterInvariant() would there-
+    // fore silently depend on the very last of ~256 runs happening to reach
+    // REVEAL — flaky and unsound.
+    //
+    // The filesystem is the only cheatcode-accessible state that survives the
+    // per-run snapshot revert. invariant_*() runs after EVERY call in EVERY
+    // run, so we use it to persist a running max of the handler's cumulative
+    // coverage counters across the whole campaign. afterInvariant() reads the
+    // file once and asserts the campaign-wide totals are non-zero — this is
+    // the regression guard against the "rubber stamp" failure mode where the
+    // invariant passes without the AUCTION reveal/cap path ever being run.
+    string constant LOG_PATH = "./cache/auction_campaign_accumulator.log";
+
     function setUp() public {
         stable      = new MockStable();
         address impl = address(new Circle());
@@ -296,94 +418,75 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
 
         handler = new CircleHandler(circle, stable);
 
+        // Only drive the guided round action + a few money-moving actions.
+        // Restricting the selector set keeps each run's call budget focused on
+        // actually completing rounds (reaching the dividend path) rather than
+        // being spent on no-op fine-grained calls that revert-early in the
+        // wrong FSM state. The fine-grained handlers still exist and are
+        // exercised by the LUCKY_DRAW suite above with the full selector set.
+        bytes4[] memory selectors = new bytes4[](3);
+        selectors[0] = CircleHandler.driveRound.selector;
+        selectors[1] = CircleHandler.claim.selector;
+        selectors[2] = CircleHandler.reveal.selector;
+        targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
         targetContract(address(handler));
 
-        // Clear any stale campaign-accumulator file from an interrupted
-        // previous run (see afterInvariant() below).
+        // Clear any stale accumulator file from an interrupted previous run.
         try vm.removeFile(LOG_PATH) {} catch {}
     }
 
-    function _checkConservation(Circle c) internal view {
-        uint256 contractBal  = stable.balanceOf(address(c));
-        uint256 totalClaims  = c.totalClaimable();
-        uint256 dust         = c.dustAccrued();
-        uint256 undrawn      = c.undrawnPools();
+    /// @notice Conservation invariant under AUCTION mode. Also persists the
+    ///         running-max of the handler's coverage counters to the campaign
+    ///         accumulator file (see the LOG_PATH rationale above): this fn is
+    ///         called after every call in every run, so it is the one place
+    ///         that can observe per-run high-water marks before the next run's
+    ///         snapshot revert wipes the handler's storage.
+    function invariant_conservationHoldsAuction() public {
+        _checkConservation(circle, stable);
 
-        uint256 totalBonds = 0;
-        uint256 n = c.memberCount();
-        for (uint256 i = 0; i < n; i++) {
-            address m = c.members(i);
-            (bool joined, uint256 stakedBond,,) = c.memberInfo(m);
-            if (joined) totalBonds += stakedBond;
-        }
-
-        assertEq(
-            contractBal,
-            totalClaims + dust + undrawn + totalBonds,
-            "conservation invariant violated"
-        );
-    }
-
-    /// @notice Conservation invariant under AUCTION mode: bids at/over cap,
-    ///         forced ties, zero bids, and the natural eligibleCount == 1
-    ///         endgame are all exercised by CircleHandler's mode-aware
-    ///         reveal action across the fuzzer's random call sequence.
-    function invariant_conservationHoldsAuction() public view {
-        _checkConservation(circle);
-    }
-
-    /// @notice Regression guard for the "rubber stamp" failure mode: if the
-    ///         handler's action-selection bias regresses such that reveal()
-    ///         (and therefore the bid-cap/tie/zero-bid logic) is never
-    ///         actually invoked by the fuzzer, this fails loudly instead of
-    ///         the invariant silently "passing" on an untested code path.
-    // Persistent (file-backed) accumulators. Foundry reverts contract/EVM
-    // storage back to the post-setUp() snapshot before each independent
-    // invariant run, so a handler-storage counter only ever reflects the
-    // LAST run, not the whole campaign — a single unlucky final run (which
-    // legitimately happens sometimes; not every run reaches REVEAL) would
-    // make a naive per-run assertion flaky. The filesystem is the only
-    // cheatcode-accessible state that survives vm snapshot reverts, so we
-    // use it to accumulate real totals across the whole fuzz campaign and
-    // assert on the aggregate only once, after the final run.
-    string constant LOG_PATH = "./cache/auction_campaign_accumulator.log";
-
-    function afterInvariant() public {
-        uint256 prevRuns;
         uint256 prevRevealOk;
         uint256 prevCapRev;
         try vm.readFile(LOG_PATH) returns (string memory content) {
-            (prevRuns, prevRevealOk, prevCapRev) = _parseLog(content);
+            (prevRevealOk, prevCapRev) = _parseLog(content);
         } catch {}
 
-        uint256 runs = prevRuns + 1;
-        uint256 revealOk = prevRevealOk + handler.revealSuccessCount();
-        uint256 capRev = prevCapRev + handler.capRevertCount();
+        uint256 revealOk = handler.revealSuccessCount();
+        uint256 capRev   = handler.capRevertCount();
 
-        vm.writeFile(LOG_PATH, string.concat(
-            vm.toString(runs), " ", vm.toString(revealOk), " ", vm.toString(capRev)
-        ));
-
-        // forge-config: default.invariant-runs = 256
-        uint256 totalRuns = 256;
-        if (runs >= totalRuns) {
-            // Final run of the campaign: assert on the accumulated totals.
-            // This is the regression guard for the exact "rubber stamp"
-            // failure mode the reviewer caught: if the handler's action
-            // bias regresses such that reveal()/the cap-revert path is
-            // never actually invoked across the ENTIRE campaign, fail loudly
-            // here instead of silently passing.
-            assertGt(revealOk, 0, "reveal() was never successfully invoked across the whole fuzz campaign");
-            assertGt(capRev, 0, "over-cap bid revert path was never exercised across the whole fuzz campaign");
-            vm.removeFile(LOG_PATH);
+        if (revealOk > prevRevealOk || capRev > prevCapRev) {
+            uint256 nextRevealOk = revealOk > prevRevealOk ? revealOk : prevRevealOk;
+            uint256 nextCapRev   = capRev > prevCapRev ? capRev : prevCapRev;
+            vm.writeFile(LOG_PATH, string.concat(
+                vm.toString(nextRevealOk), " ", vm.toString(nextCapRev)
+            ));
         }
     }
 
-    function _parseLog(string memory content) internal pure returns (uint256 runs, uint256 revealOk, uint256 capRev) {
+    /// @notice Regression guard for the "rubber stamp" failure mode: if the
+    ///         handler's action set regresses such that reveal() (and therefore
+    ///         the bid-cap/tie/zero-bid logic) is never actually invoked across
+    ///         the WHOLE campaign, this fails loudly instead of the invariant
+    ///         silently "passing" on an untested code path.
+    function afterInvariant() public {
+        uint256 revealOk;
+        uint256 capRev;
+        try vm.readFile(LOG_PATH) returns (string memory content) {
+            (revealOk, capRev) = _parseLog(content);
+        } catch {}
+
+        console.log("campaign revealSuccessCount (high-water)", revealOk);
+        console.log("campaign capRevertCount (high-water)", capRev);
+
+        assertGt(revealOk, 0, "reveal() was never successfully invoked across the whole AUCTION fuzz campaign");
+        assertGt(capRev, 0, "over-cap bid revert path was never exercised across the whole AUCTION fuzz campaign");
+
+        try vm.removeFile(LOG_PATH) {} catch {}
+    }
+
+    function _parseLog(string memory content) internal pure returns (uint256 revealOk, uint256 capRev) {
         bytes memory b = bytes(content);
         uint256 i;
-        (runs, i) = _parseUint(b, 0);
-        (revealOk, i) = _parseUint(b, i + 1);
+        (revealOk, i) = _parseUint(b, 0);
         (capRev, ) = _parseUint(b, i + 1);
     }
 
@@ -394,4 +497,25 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
             i++;
         }
     }
+}
+
+/// @dev Shared conservation check used by both invariant suites.
+function _checkConservation(Circle c, MockStable stable) view {
+    uint256 contractBal  = stable.balanceOf(address(c));
+    uint256 totalClaims  = c.totalClaimable();
+    uint256 dust         = c.dustAccrued();
+    uint256 undrawn      = c.undrawnPools();
+
+    uint256 totalBonds = 0;
+    uint256 n = c.memberCount();
+    for (uint256 i = 0; i < n; i++) {
+        address m = c.members(i);
+        (bool joined, uint256 stakedBond,,) = c.memberInfo(m);
+        if (joined) totalBonds += stakedBond;
+    }
+
+    require(
+        contractBal == totalClaims + dust + undrawn + totalBonds,
+        "conservation invariant violated"
+    );
 }
