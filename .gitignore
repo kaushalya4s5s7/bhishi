@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# env
+.env
+.env.*
+!.env.example
+
+# turbo
+.turbo/
+
+# foundry build artifacts
+out/
+cache/
+
+# misc
+*.log
+.DS_Store
+
+# Note: packages/contracts/lib is committed so `forge build` is reproducible
+# without needing `forge install`.
