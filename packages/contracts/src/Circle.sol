@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IGelatoVRFConsumer} from "./interfaces/IGelatoVRFConsumer.sol";
+import {IReputationRegistry} from "./interfaces/IReputationRegistry.sol";
 
 /// @notice Distribution mechanism for a circle's pot each round.
 enum Mode {
@@ -382,6 +383,9 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
 
         // Guard: if all members were slashed before VRF fired, no one is eligible.
         // Transition to STALLED so members can recover via reclaimOnStall().
+        // TODO(security-audit): when eligibleCount == 0, the roundPool accumulated this round
+        // is NOT redistributed here — it remains in roundPool. Members must call reclaimOnStall()
+        // to recover it. This is a known edge case flagged for the M6 security-auditor gate.
         if (eligibleCount == 0) {
             state = State.STALLED;
             emit Stalled(currentRound);
@@ -416,17 +420,39 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
         }
 
         if (lastRound) {
-            // Return bonds to all members via claimable
-            // TODO M6: call ReputationRegistry.attest(...) here
+            // Return bonds to all members via claimable; attest reputation
+            // Release dust to first joined member so it is always claimable (LEAK 3 conservation)
+            uint256 dust = dustAccrued;
+            dustAccrued = 0;
+            bool dustAssigned = false;
             for (uint256 i = 0; i < n; i++) {
                 address m = members[i];
-                if (memberInfo[m].joined && memberInfo[m].stakedBond > 0) {
-                    memberInfo[m].claimable += memberInfo[m].stakedBond;
-                    memberInfo[m].stakedBond = 0;
+                if (memberInfo[m].joined) {
+                    if (memberInfo[m].stakedBond > 0) {
+                        memberInfo[m].claimable += memberInfo[m].stakedBond;
+                        memberInfo[m].stakedBond = 0;
+                    }
+                    if (!dustAssigned && dust > 0) {
+                        memberInfo[m].claimable += dust;
+                        dustAssigned = true;
+                    }
                 }
             }
+            // If no joined member exists to absorb dust, re-park it (edge case)
+            if (!dustAssigned) dustAccrued = dust;
+
             drawRequestedAt = 0;
             state = State.COMPLETED;
+
+            // M6: attest all joined members in the reputation registry
+            if (reputation != address(0)) {
+                for (uint256 i = 0; i < n; i++) {
+                    address m = members[i];
+                    if (memberInfo[m].joined) {
+                        IReputationRegistry(reputation).attest(m, currentRound + 1);
+                    }
+                }
+            }
         } else {
             // Advance to next round: reset per-round state
             currentRound++;
