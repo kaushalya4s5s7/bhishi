@@ -151,9 +151,17 @@ first-class exits with **permissionless** withdrawal, ensuring no path traps fun
   own share: current-round contribution (not yet paid out) **+ remaining bond**, computed exactly. No
   organizer, no oracle, no admin. This bounds the trust placed in Gelato to *liveness only, for at most
   VRF_TIMEOUT* — never fairness, never custody.
-- **Auction mode (optional 2nd mode, same contract, `mode == AUCTION`):** replace DRAW with a sealed-bid
-  discount auction (commit-reveal bids prevent sniping); lowest bid wins pool minus their bid, bid
-  redistributed pro-rata as the round dividend. DRAW remains the polished demo path; AUCTION ships with tests.
+- **Auction mode (`mode == AUCTION`, implemented):** each round, non-winning members submit sealed
+  bids via the same commit-reveal machinery (bid = discount they'll accept off the round pot,
+  capped at 40% of the pot — standard chit-fund convention). Highest revealed bid wins the
+  discounted pot; ties (or an all-zero/no-bid round) fall back to Gelato VRF among the tied/eligible
+  set, exactly mirroring the real-world "lottery when nobody bids" rule. The discount is distributed
+  as a pro-rata dividend to **every** joined member, including that round's winner and past
+  winners — no organizer/foreman commission, matching Bhishi's fee-free design. Once a member wins,
+  they are permanently excluded from future bidding ("prized subscriber" rule), continuing to pay
+  contributions and receive dividends until the circle completes. Winners still pay their full
+  round contribution regardless of their bid — unchanged from LUCKY_DRAW. DRAW remains the polished
+  demo path; AUCTION ships with unit tests (`Auction.t.sol`) plus a conservation-invariant fuzzer.
 
 ---
 
@@ -340,7 +348,7 @@ CircleCompleted(circleId)
 11. Deploy to Monad testnet (clones), verify contracts, record demo, README badge.
 
 **Test files map 1:1 to shots + leaks:** `Custody`, `Fairness`, `Slashing`, `ReclaimOnStall`,
-`CollateralSizing`, `ConservationInv`, `WinnerDefault`, `FakeCircleAttest`, `FillingTimeout`, `AuctionMode`.
+`CollateralSizing`, `ConservationInv`, `WinnerDefault`, `FakeCircleAttest`, `FillingTimeout`, `Auction`.
 
 ---
 

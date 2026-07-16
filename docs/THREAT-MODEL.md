@@ -84,7 +84,7 @@ members each draw. **Proof:** covered in `Fairness.t.sol`.
 a fulfilment for a stale round is rejected. **Proof:** negative cases in `Fairness.t.sol`.
 
 ### T11 — Bid sniping (auction mode)
-**Mitigation:** sealed-bid commit-reveal; bids hidden until reveal. **Proof:** `AuctionMode.t.sol`.
+**Mitigation:** sealed-bid commit-reveal; bids hidden until reveal. **Proof:** `Auction.t.sol`.
 
 ### T12 — Gas griefing via per-circle deploy cost
 **Not an attack, a scale concern:** full-bytecode deploy per circle is expensive and doesn't scale.
