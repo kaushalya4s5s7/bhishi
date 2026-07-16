@@ -42,6 +42,7 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     error DrawNotRequested();
     error VrfTimeoutNotElapsed();
     error DrawAlreadyRequested();
+    error BidExceedsCap();
 
     // ─── state enum ────────────────────────────────────────────────────────────
     /// @notice Full lifecycle state machine.
@@ -277,7 +278,17 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
 
         bytes32 expected = keccak256(abi.encodePacked(amount, salt, msg.sender));
         if (expected != commitmentOf[msg.sender]) revert InvalidReveal();
-        if (amount != contribution) revert InvalidReveal();
+
+        if (mode == Mode.LUCKY_DRAW) {
+            if (amount != contribution) revert InvalidReveal();
+        } else {
+            // AUCTION: `amount` is the bid discount, capped at 40% of this
+            // round's pot. hasWon members should never reach here (they are
+            // auto-marked revealed at round start).
+            uint256 cap = (roundPool * MAX_BID_DISCOUNT_BPS) / 10000;
+            if (amount > cap) revert BidExceedsCap();
+            bidDiscount[msg.sender] = amount;
+        }
 
         // CEI
         revealed[msg.sender] = true;
@@ -474,8 +485,19 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
             revealCount = 0;
             for (uint256 i = 0; i < n; i++) {
                 address m = members[i];
-                committed[m] = false;
-                revealed[m]  = false;
+                if (mode == Mode.AUCTION && hasWon[m]) {
+                    // Past winners ("prized subscribers") are permanently excluded
+                    // from bidding — auto-advance them so the all-committed/
+                    // all-revealed checks aren't blocked waiting on them.
+                    committed[m]   = true;
+                    revealed[m]    = true;
+                    bidDiscount[m] = 0;
+                    revealCount++;
+                } else {
+                    committed[m]   = false;
+                    revealed[m]    = false;
+                    bidDiscount[m] = 0; // clear any stale bid from a prior round
+                }
             }
             roundStart = block.timestamp;
             state = State.COMMIT;
