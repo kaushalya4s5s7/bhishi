@@ -2,15 +2,24 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { createPublicClient, createWalletClient, http, custom, keccak256, encodePacked } from 'viem';
-import { monadTestnetChain } from '@/lib/privy';
+import { keccak256, encodePacked, pad, toHex } from 'viem';
 import { circleAbi } from '@/lib/contracts';
+import { publicClient, getWalletClient } from '@/lib/wallet';
+import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
+import { claimFaucet } from '@/lib/faucet';
 import { PhaseBadge } from './PhaseBadge';
 
 const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
 type StateName = typeof STATE_NAMES[number];
 
-const publicClient = createPublicClient({ chain: monadTestnetChain, transport: http() });
+/**
+ * The salt the contract hashes is a bytes32. We derive it deterministically from
+ * the user's secret number so they only need to remember the number: the same
+ * secret always yields the same salt for commit AND reveal.
+ */
+function secretToSalt(secret: string): `0x${string}` {
+  return pad(toHex(BigInt(secret)), { size: 32 });
+}
 
 function truncate(addr: string) {
   return addr.slice(0, 6) + '...' + addr.slice(-4);
@@ -30,6 +39,8 @@ export function CircleView({ circleAddress }: CircleViewProps) {
   const [seats, setSeats] = useState<number>(0);
   const [members, setMembers] = useState<string[]>([]);
   const [contribution, setContribution] = useState<bigint>(0n);
+  const [bond, setBond] = useState<bigint>(0n);
+  const [balance, setBalance] = useState<bigint>(0n);
   const [commitOf, setCommitOf] = useState<string>('0x' + '0'.repeat(64));
   const [claimable, setClaimable] = useState<bigint>(0n);
   const [round, setRound] = useState<number>(0);
@@ -42,17 +53,19 @@ export function CircleView({ circleAddress }: CircleViewProps) {
 
   const load = useCallback(async () => {
     try {
-      const [stateVal, seatsVal, memberCountVal, contributionVal, roundVal] = await Promise.all([
+      const [stateVal, seatsVal, memberCountVal, contributionVal, bondVal, roundVal] = await Promise.all([
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'round' }).catch(() => 0),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
       ]);
 
       setState(Number(stateVal));
       setSeats(Number(seatsVal));
       setContribution(BigInt(contributionVal as any));
+      setBond(BigInt(bondVal as any));
       setRound(Number(roundVal));
 
       const count = Number(memberCountVal);
@@ -64,10 +77,13 @@ export function CircleView({ circleAddress }: CircleViewProps) {
       setMembers(memberList);
 
       if (userAddress) {
-        const ch = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitOf', args: [userAddress] }).catch(() => '0x' + '0'.repeat(64));
+        const ch = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitmentOf', args: [userAddress] }).catch(() => '0x' + '0'.repeat(64));
         setCommitOf(ch as string);
-        const cl = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'claimable', args: [userAddress] }).catch(() => 0n);
-        setClaimable(BigInt(cl as any));
+        // memberInfo returns (joined, stakedBond, contribution, claimable)
+        const info = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [userAddress] }).catch(() => [false, 0n, 0n, 0n]);
+        setClaimable(BigInt((info as any)[3] ?? 0n));
+        const bal = await stableBalance(userAddress).catch(() => 0n);
+        setBalance(bal);
       }
 
       // Load events
@@ -97,18 +113,13 @@ export function CircleView({ circleAddress }: CircleViewProps) {
     return () => clearInterval(interval);
   }, [load]);
 
-  async function getWalletClient() {
-    if (!embeddedWallet) throw new Error('No wallet');
-    const provider = await embeddedWallet.getEthereumProvider();
-    return createWalletClient({ account: userAddress!, chain: monadTestnetChain, transport: custom(provider) });
-  }
-
   async function doWrite(functionName: string, args: any[] = []) {
     setTxPending(true);
     setTxError(null);
     try {
-      const wc = await getWalletClient();
-      await wc.writeContract({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      const wc = await getWalletClient(embeddedWallet, userAddress!);
+      const hash = await wc.writeContract({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      await publicClient.waitForTransactionReceipt({ hash });
       await load();
     } catch (e: any) {
       setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
@@ -117,13 +128,49 @@ export function CircleView({ circleAddress }: CircleViewProps) {
     }
   }
 
+  /** join() and commit() both move contribution/bond, so ensure allowance first. */
+  async function doWriteWithApproval(functionName: string, args: any[], needed: bigint) {
+    setTxPending(true);
+    setTxError(null);
+    try {
+      await ensureStableAllowance(embeddedWallet, userAddress!, circleAddress, needed);
+      const wc = await getWalletClient(embeddedWallet, userAddress!);
+      const hash = await wc.writeContract({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      await publicClient.waitForTransactionReceipt({ hash });
+      await load();
+    } catch (e: any) {
+      setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
+    } finally {
+      setTxPending(false);
+    }
+  }
+
+  async function doFaucet() {
+    setTxPending(true);
+    setTxError(null);
+    try {
+      await claimFaucet(embeddedWallet, userAddress!);
+      await load();
+    } catch (e: any) {
+      setTxError(e?.shortMessage ?? e?.message ?? 'Faucet failed');
+    } finally {
+      setTxPending(false);
+    }
+  }
+
+  /**
+   * Commit hash MUST match the contract: keccak256(abi.encodePacked(amount, salt, msg.sender)).
+   * For LUCKY_DRAW the revealed amount must equal the contribution, so we commit
+   * to `contribution` as the amount and the user's secret (as bytes32) as the salt.
+   */
   function computeHash() {
     if (!userAddress || !secret) return;
     try {
-      const hash = keccak256(encodePacked(['address', 'uint256'], [userAddress, BigInt(secret)]));
+      const salt = secretToSalt(secret);
+      const hash = keccak256(encodePacked(['uint256', 'bytes32', 'address'], [contribution, salt, userAddress]));
       setComputedHash(hash);
     } catch {
-      setTxError('Invalid secret — must be a number');
+      setTxError('Invalid secret — must be a whole number');
     }
   }
 
@@ -224,6 +271,21 @@ export function CircleView({ circleAddress }: CircleViewProps) {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-4">Actions</h2>
 
+        {authenticated && userAddress && (
+          <div className="mb-4 flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2">
+            <span className="text-gray-600">
+              Balance: <span className="font-medium">{(Number(balance) / 1e6).toFixed(2)} mUSDC</span>
+            </span>
+            <button
+              onClick={doFaucet}
+              disabled={txPending}
+              className="text-xs text-purple-600 hover:text-purple-800 border border-purple-200 px-2.5 py-1 rounded-md disabled:opacity-50 transition"
+            >
+              {txPending ? '...' : 'Get 500 test mUSDC'}
+            </button>
+          </div>
+        )}
+
         {!authenticated ? (
           <button onClick={() => login()} className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2.5 rounded-lg transition">
             Sign in to participate
@@ -233,7 +295,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
             <p className="text-sm text-gray-500">You have joined this circle. Waiting for all seats to fill.</p>
           ) : (
             <button
-              onClick={() => doWrite('join')}
+              onClick={() => doWriteWithApproval('join', [], bond)}
               disabled={txPending}
               className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-lg transition"
             >
@@ -268,7 +330,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
                   </div>
                 )}
                 <button
-                  onClick={() => computedHash && doWrite('commit', [computedHash as `0x${string}`])}
+                  onClick={() => computedHash && doWriteWithApproval('commit', [computedHash as `0x${string}`], contribution)}
                   disabled={txPending || !computedHash}
                   className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-lg transition"
                 >
@@ -293,7 +355,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
                 />
               </div>
               <button
-                onClick={() => secret && doWrite('reveal', [BigInt(secret)])}
+                onClick={() => secret && doWrite('reveal', [contribution, secretToSalt(secret)])}
                 disabled={txPending || !secret}
                 className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-lg transition"
               >
