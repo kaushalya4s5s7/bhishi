@@ -7,6 +7,10 @@ const nextConfig = {
       '@farcaster/mini-app-solana': './src/stubs/empty.js',
     },
   },
+  // Disable persistent filesystem cache to avoid filling disk in dev
+  experimental: {
+    isrMemoryCacheSize: 0,
+  },
   // Webpack fallback
   webpack: (config) => {
     config.resolve.alias = {
