@@ -42,7 +42,6 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     error DrawNotRequested();
     error VrfTimeoutNotElapsed();
     error DrawAlreadyRequested();
-    error AuctionNotImplemented();
 
     // ─── state enum ────────────────────────────────────────────────────────────
     /// @notice Full lifecycle state machine.
@@ -72,6 +71,7 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     uint256 public constant REVEAL_WINDOW   = 1 days;
     uint256 public constant MAX_SEATS       = 20;
     uint256 public constant VRF_TIMEOUT     = 1 days;
+    uint256 public constant MAX_BID_DISCOUNT_BPS = 4000; // 40% of round pool, matches real-world chit-fund convention
 
     // ─── immutable-per-clone config ─────────────────────────────────────────────
     uint256 public contribution;
@@ -104,6 +104,13 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     mapping(address => bool)    public revealed;
     uint256 public revealCount; // how many members revealed this round
     uint256 public roundPool;   // total contributions collected this round
+
+    // ─── auction-mode bid tracking (reset each round) ──────────────────────────
+    // Deliberately just the raw revealed bids — no incremental "highest so far"
+    // tracker. The winner/tie set is recomputed by scanning bidDiscount[] at
+    // draw time (fulfillRandomness, a later task), so there is exactly one place
+    // that decides who's winning, not two trackers that could drift out of sync.
+    mapping(address => uint256) public bidDiscount; // revealed bid, meaningful only in AUCTION mode
 
     // ─── dust accumulator (LEAK 3) ─────────────────────────────────────────────
     uint256 public dustAccrued;
@@ -141,7 +148,6 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     ) external {
         if (initialized) revert AlreadyInitialized();
         if (_seats < 2 || _seats > MAX_SEATS) revert InvalidSeats();
-        if (_mode == Mode.AUCTION) revert AuctionNotImplemented();
         initialized = true;
 
         contribution = _contribution;

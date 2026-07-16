@@ -65,9 +65,10 @@ contract SlashFSMTest is Test {
         );
     }
 
-    /// @notice Complementary: AUCTION mode is rejected at initialization.
-    function test_auctionModeRevertsOnCreate() public {
-        vm.expectRevert(Circle.AuctionNotImplemented.selector);
-        factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION);
+    /// @notice AUCTION mode is now accepted at initialization (no longer a stub).
+    function test_auctionModeAcceptedOnCreate() public {
+        Circle circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
+        assertEq(uint256(circle.mode()), uint256(Mode.AUCTION));
+        assertEq(uint256(circle.state()), uint256(Circle.State.FILLING));
     }
 }
