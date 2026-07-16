@@ -418,13 +418,82 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
         }
 
         // CEI: update state before transfers
-        uint256 winnerIdx = randomness % eligibleCount;
-        address winner = eligible[winnerIdx];
+        address winner;
+        uint256 discount;
+
+        if (mode == Mode.LUCKY_DRAW) {
+            uint256 winnerIdx = randomness % eligibleCount;
+            winner = eligible[winnerIdx];
+            discount = 0;
+        } else {
+            // AUCTION: recompute the highest bid and the set of eligible
+            // members tied at that bid directly from bidDiscount[], scanning
+            // only `eligible` (already joined && !hasWon). Single source of
+            // truth for "who's winning" — no running "highest so far" tracker.
+            uint256 topBid = 0;
+            uint256 tiedCount = 0;
+            for (uint256 i = 0; i < eligibleCount; i++) {
+                uint256 b = bidDiscount[eligible[i]];
+                if (b > topBid) {
+                    topBid = b;
+                    tiedCount = 1;
+                } else if (b == topBid) {
+                    tiedCount++;
+                }
+            }
+
+            if (topBid > 0 && tiedCount == 1) {
+                for (uint256 i = 0; i < eligibleCount; i++) {
+                    if (bidDiscount[eligible[i]] == topBid) {
+                        winner = eligible[i];
+                        break;
+                    }
+                }
+                discount = topBid;
+            } else if (topBid > 0) {
+                // Genuine tie at a positive top bid: lottery held ONLY among
+                // the tied top bidders, not the whole eligible set.
+                address[] memory tied = new address[](tiedCount);
+                uint256 tiedIdx = 0;
+                for (uint256 i = 0; i < eligibleCount; i++) {
+                    if (bidDiscount[eligible[i]] == topBid) {
+                        tied[tiedIdx++] = eligible[i];
+                    }
+                }
+                winner = tied[randomness % tiedCount];
+                discount = topBid;
+            } else {
+                // topBid == 0: nobody bid above zero (or sole remaining
+                // member's own bid is zero). Fall back to VRF over the FULL
+                // eligible set at zero discount.
+                uint256 winnerIdx = randomness % eligibleCount;
+                winner = eligible[winnerIdx];
+                discount = 0;
+            }
+        }
+
         hasWon[winner] = true;
 
         uint256 pot = roundPool;
         roundPool = 0;
-        memberInfo[winner].claimable += pot;
+
+        if (discount > 0) {
+            // Distribute the discount as a dividend to ALL joined members,
+            // including the winner. No organizer/foreman commission.
+            uint256 joinedForDividend = _activeCount();
+            uint256 sharePerMember = discount / joinedForDividend;
+            uint256 dividendDust = discount - sharePerMember * joinedForDividend;
+            for (uint256 i = 0; i < n; i++) {
+                address m = members[i];
+                if (memberInfo[m].joined) {
+                    memberInfo[m].claimable += sharePerMember;
+                }
+            }
+            dustAccrued += dividendDust;
+            memberInfo[winner].claimable += (pot - discount);
+        } else {
+            memberInfo[winner].claimable += pot;
+        }
 
         emit WinnerDrawn(currentRound, winner, randomness);
 
