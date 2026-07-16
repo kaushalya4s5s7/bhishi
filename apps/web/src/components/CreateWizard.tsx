@@ -3,7 +3,11 @@
 import { useState } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 
-export function CreateWizard() {
+interface CreateWizardProps {
+  onSuccess?: (addr: string) => void;
+}
+
+export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
   const { authenticated, login } = usePrivy();
   const [seats, setSeats] = useState(4);
   const [contribution, setContribution] = useState(100);
@@ -22,7 +26,9 @@ export function CreateWizard() {
     setError('');
     try {
       // TODO M11: wire writeContract to CircleFactory.createCircle
+      const newAddr = '0x0000000000000000000000000000000000000000';
       alert('Circle creation will be wired in M11 deploy step. Params: seats=' + seats + ' contribution=' + contribution + ' bond=' + bond);
+      if (onSuccess) onSuccess(newAddr);
     } catch (e: any) {
       setError(e?.message ?? 'Error creating circle');
     } finally {
