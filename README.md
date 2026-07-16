@@ -81,6 +81,51 @@ all 3 members won exactly once, every bond came back, and after **every single r
 the contract's balance exactly equalled *what it owes members + dividends + bonds* — no
 money created, none lost, no organizer fee. **Trust the math, not the person.**
 
+## The Other Mode: A Lucky-Draw Circle, Start to Finish (live on-chain)
+
+Bhishi has a second mode — **lucky-draw** — where the winner each round is picked at
+**random** (via verifiable randomness) instead of by bidding. We ran a full one of these
+too: 3 people, 3 rounds, everyone wins once.
+
+**How it differs from the auction:** there's no bidding and no dividend. Every round each
+member simply pays their **10 mUSDC** into the pot, and one member is drawn **at random** to
+take the **whole 30 mUSDC pot**. Just like a real rotating savings group ("chit"/"committee"),
+**past winners keep paying in every round** — they just can't be drawn again until everyone
+has had their turn.
+
+**Setup** ([circle `0x1747d6be…`](https://testnet.monadexplorer.com/address/0x1747d6beae5b3759da8918b400d750109e397ae1)):
+
+| # | Step | In plain English | Transaction |
+|---|------|------------------|-------------|
+| 1 | Join ×3 | Each member stakes their 20 mUSDC bond and takes a seat | [`0xf6497c28…`](https://testnet.monadexplorer.com/tx/0xf6497c28374af95fa562a8dee1f15887f858851a62316250a5404be3bcbf4a3c) · [`0x9c09d72b…`](https://testnet.monadexplorer.com/tx/0x9c09d72b4e6361fb93603bc28cc64123fecda38985ea16aa9c018fe3607dc1be) · [`0xe114fbb4…`](https://testnet.monadexplorer.com/tx/0xe114fbb45725fc1e9693846f397edd317d580c6415f311590c08b953dfaf8586) |
+
+**Round 1** — everyone pays in, then a random winner is drawn:
+
+| # | Step | In plain English | Transaction |
+|---|------|------------------|-------------|
+| 2 | Commit ×3 | Each member pays their 10 mUSDC into the pot | [`0x3c1fe692…`](https://testnet.monadexplorer.com/tx/0x3c1fe692818d5b550d5299e7b33ea924d7a4cbda7c973cb0afc7b9cf97bf6f99) · [`0x7fa83dd3…`](https://testnet.monadexplorer.com/tx/0x7fa83dd31b2e86bf253cf2a19d74ec8ee6d2d456d69774c82f0fe23e3adce0db) · [`0x5071ae9e…`](https://testnet.monadexplorer.com/tx/0x5071ae9e2cc1e500eb7e9dcce166bc7f37b5db3f8482f8bb7700e55789667070) |
+| 3 | Open + reveal ×3 | The round opens and everyone confirms their entry | [`0x1f3af14d…`](https://testnet.monadexplorer.com/tx/0x1f3af14dd0330815a8ce5fd9531c529ce7b7a916836c2d2c15e3d941efab7ab5) · [`0xabe0cdaf…`](https://testnet.monadexplorer.com/tx/0xabe0cdaf9a8336640d21a91dbcf2ae8a6209025d3d43964fcfa2b3887a61cdbc) · [`0x3782d298…`](https://testnet.monadexplorer.com/tx/0x3782d298f061671beee2dd2617bfcba4406be26be2796dfd4feb0ca9b425cd46) · [`0x18b1cf8e…`](https://testnet.monadexplorer.com/tx/0x18b1cf8ebb14365eb7198dc5f0ef7ab7c50baccb4ed983881d20a4092b95028b) |
+| 4 | Draw winner | Randomness picks the winner; **full 30 mUSDC pot** is theirs | [`0xa3344db3…`](https://testnet.monadexplorer.com/tx/0xa3344db350c4aa52ab7162a75eedf0fe91ff62859dd419dd41f2b4ec262fa3f2) → [`0x346eedde…`](https://testnet.monadexplorer.com/tx/0x346eedde9628ba8faacadd6112998e3a6f723217c2f254d6706bde2eaaf47ee0) |
+
+**Round 2** — the round-1 winner keeps paying in but can't be drawn again:
+
+| # | Step | In plain English | Transaction |
+|---|------|------------------|-------------|
+| 5 | Commit + reveal ×3 | All three pay in again (winner included) and confirm | [`0x7019d810…`](https://testnet.monadexplorer.com/tx/0x7019d81099160e9a5b4680df7559414ef49fd9c31cfbef2bdb08743e58115c23) · [`0x22012d90…`](https://testnet.monadexplorer.com/tx/0x22012d90d832112094ff0c9a8656cd27fc0a4409a577008c97f1811e7661260a) · [`0xf72dcc18…`](https://testnet.monadexplorer.com/tx/0xf72dcc18007599ff1c3559e3bfc0cda000331e8b56940dd4aae873972c8fce0f) |
+| 6 | Draw winner | One of the two remaining is drawn; takes the pot | [`0x7cae5c67…`](https://testnet.monadexplorer.com/tx/0x7cae5c6736e8f78d7446fa7ef393de6a75749d62e13f3d8eb48feb685748894e) → [`0xedb610dd…`](https://testnet.monadexplorer.com/tx/0xedb610dd719f40296a3fde572f3ef9ace48b519047de7df747f180f8b3a07482) |
+
+**Round 3 (final)** — only one member hasn't won, so they win and the circle closes:
+
+| # | Step | In plain English | Transaction |
+|---|------|------------------|-------------|
+| 7 | Commit + reveal ×3 | Final round paid in and confirmed | [`0xe9692578…`](https://testnet.monadexplorer.com/tx/0xe9692578ce514ba47e57ddb3c840b1872e0484de928a8b579a7e3acf74721d86) · [`0x4218870d…`](https://testnet.monadexplorer.com/tx/0x4218870d20e3673988692d79909f1dfcee06b0b28e6f7ed12e239800d79f3701) · [`0x52da7154…`](https://testnet.monadexplorer.com/tx/0x52da7154f218091ece2c7bcbf0d5c4ed7d66beeba87048ee3d9df0ec5062df83) |
+| 8 | Draw + **complete** | Last member wins, bonds returned, circle **COMPLETED** | [`0x08823ae4…`](https://testnet.monadexplorer.com/tx/0x08823ae4ba972f5ead2afcab024430477b225aa7ee515894cbac5c3701f1e489) → [`0x0abc778a…`](https://testnet.monadexplorer.com/tx/0x0abc778ac531bca105e85c62e5a9871c805ce458d1ef13f5d321d915c6a2ea2c) |
+
+**The result:** all 3 members won exactly once (each ending with 50 mUSDC — the 30 pot they
+won plus their 20 bond back), the circle reached **COMPLETED**, and the conservation check
+held after every round. Same guarantees as the auction — just a random winner instead of a
+bid-based one.
+
 ## Architecture
 
 ```
