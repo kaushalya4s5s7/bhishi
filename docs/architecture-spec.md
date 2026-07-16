@@ -155,13 +155,24 @@ first-class exits with **permissionless** withdrawal, ensuring no path traps fun
   bids via the same commit-reveal machinery (bid = discount they'll accept off the round pot,
   capped at 40% of the pot — standard chit-fund convention). Highest revealed bid wins the
   discounted pot; ties (or an all-zero/no-bid round) fall back to Gelato VRF among the tied/eligible
-  set, exactly mirroring the real-world "lottery when nobody bids" rule. The discount is distributed
-  as a pro-rata dividend to **every** joined member, including that round's winner and past
-  winners — no organizer/foreman commission, matching Bhishi's fee-free design. Once a member wins,
-  they are permanently excluded from future bidding ("prized subscriber" rule), continuing to pay
-  contributions and receive dividends until the circle completes. Winners still pay their full
-  round contribution regardless of their bid — unchanged from LUCKY_DRAW. DRAW remains the polished
-  demo path; AUCTION ships with unit tests (`Auction.t.sol`) plus a conservation-invariant fuzzer.
+  set, exactly mirroring the real-world "lottery when nobody bids" (and "lottery among tied top
+  bidders") rules under the Chit Funds Act, 1982. The discount is distributed as a pro-rata dividend
+  to **every** joined member, including that round's winner and past winners — matching the authentic
+  chit-fund rule that the discount is "distributed equally amongst all subscribers." Once a member
+  wins, they are permanently excluded from future bidding ("prized subscriber" rule), continuing to
+  pay contributions and receive dividends until the circle completes. Winners still pay their full
+  round contribution regardless of their bid — unchanged from LUCKY_DRAW.
+
+  **One deliberate divergence from real-world chit funds:** authentic funds deduct a *foreman
+  (organizer) commission* — 5% of the chit value, capped at 7% since the Chit Funds (Amendment) Act,
+  2019 — from the discount *before* the dividend split, and the foreman keeps it. Bhishi charges **no
+  such commission**: the entire discount flows back to subscribers as dividend. This is the core
+  product differentiator (a trustless, fee-free ROSCA with no middleman rake), not an oversight — it
+  is the one place Bhishi intentionally improves on the traditional model rather than replicating it.
+  Every other mechanic (highest-discount-wins, 40% cap, all-member dividend, prized-subscriber
+  exclusion, lot-based tie/no-bid fallback, fixed full monthly contribution) faithfully matches the
+  real-world flow. DRAW remains the polished demo path; AUCTION ships with unit tests
+  (`Auction.t.sol`) plus a conservation-invariant fuzzer.
 
 ---
 

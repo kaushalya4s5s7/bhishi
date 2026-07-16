@@ -479,7 +479,17 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
 
         if (discount > 0) {
             // Distribute the discount as a dividend to ALL joined members,
-            // including the winner. No organizer/foreman commission.
+            // including the winner — matching the real-world chit-fund rule
+            // that the discount is split equally among all subscribers.
+            //
+            // DELIBERATE DIVERGENCE: real chit funds deduct a foreman/organizer
+            // commission (5%, capped at 7% since the Chit Funds Amendment Act
+            // 2019) from `discount` here before splitting, and the foreman
+            // keeps it. Bhishi takes NO commission — the full discount goes
+            // back to subscribers. This is the fee-free product design, not an
+            // omission; the winner gets `pot - discount` (line below) plus
+            // their own per-member share, so the whole discount is conserved
+            // among members with no rake.
             uint256 joinedForDividend = _activeCount();
             uint256 sharePerMember = discount / joinedForDividend;
             uint256 dividendDust = discount - sharePerMember * joinedForDividend;
