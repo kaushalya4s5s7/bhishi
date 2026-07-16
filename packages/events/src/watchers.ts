@@ -1,11 +1,12 @@
 import type { PublicClient, Log } from 'viem';
 import { circleAbi } from '@bhishi/shared';
 
+// Mirrors the Circle.sol event set exactly (see packages/shared abis/Circle.json).
 export type CircleEventName =
   | 'Joined' | 'Activated' | 'FillingRefunded'
   | 'RoundStarted' | 'Committed' | 'Revealed'
-  | 'DrawRequested' | 'WinnerDrawn' | 'Slashed'
-  | 'Stalled' | 'DrawReady';
+  | 'DrawRequested' | 'DrawReady' | 'WinnerDrawn'
+  | 'Slashed' | 'Stalled' | 'Claimed';
 
 export type CircleEvent = {
   name: CircleEventName;

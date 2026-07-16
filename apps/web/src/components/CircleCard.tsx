@@ -7,7 +7,7 @@ import { monadTestnetChain } from '@/lib/privy';
 import { circleAbi } from '@/lib/contracts';
 import { PhaseBadge } from './PhaseBadge';
 
-const STATE_NAMES = ['FILLING','ACTIVE','ABORTED','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
+const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
 type StateName = typeof STATE_NAMES[number];
 
 function truncate(addr: string) {
@@ -55,10 +55,11 @@ export function CircleCard({ circleAddress, userAddress }: CircleCardProps) {
           setIsMember(member);
 
           if (member) {
-            const commitHash = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitOf', args: [userAddress] });
+            const commitHash = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitmentOf', args: [userAddress] });
             setHasCommitted((commitHash as string) !== '0x' + '0'.repeat(64));
-            const cl = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'claimable', args: [userAddress] });
-            setClaimable(BigInt(cl as any));
+            // memberInfo returns (joined, stakedBond, contribution, claimable)
+            const info = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [userAddress] });
+            setClaimable(BigInt((info as any)[3] ?? 0n));
           }
         }
       } catch (e) {
@@ -75,7 +76,7 @@ export function CircleCard({ circleAddress, userAddress }: CircleCardProps) {
   }
 
   const stateName: StateName = state !== null ? (STATE_NAMES[state] ?? 'FILLING') : 'FILLING';
-  const phaseForBadge = stateName === 'ABORTED' ? 'ABORTED' : stateName === 'PAYOUT' ? 'COMPLETED' : stateName;
+  const phaseForBadge = stateName === 'ABORTED_FILLING' ? 'ABORTED' : stateName === 'PAYOUT' ? 'COMPLETED' : stateName;
 
   let actionLabel = 'View';
   const actionHref = `/circle/${circleAddress}`;
