@@ -29,6 +29,10 @@ contract AuctionTest is Test {
         (, , , claimable) = circle.memberInfo(who);
     }
 
+    function _bond(Circle circle, address who) internal view returns (uint256 stakedBond) {
+        (, stakedBond, , ) = circle.memberInfo(who);
+    }
+
     function _fundAndJoin(Circle circle, address who) internal {
         deal(address(stable), who, BOND + CONTRIB * 10);
         vm.prank(who); stable.approve(address(circle), type(uint256).max);
@@ -261,5 +265,52 @@ contract AuctionTest is Test {
 
         assertTrue(circle.hasWon(lastBidder), "sole remaining bidder must win outright");
         assertEq(uint256(circle.state()), uint256(Circle.State.COMPLETED));
+    }
+
+    /// @notice Full 3-round auction circle: every member wins exactly once,
+    ///         circle reaches COMPLETED, bonds returned, balances conserved.
+    function test_fullAuctionCycleConservesBalance() public {
+        Circle circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
+        _fundAndJoin(circle, alice);
+        _fundAndJoin(circle, bob);
+        _fundAndJoin(circle, carol);
+
+        address[3] memory ppl = [alice, bob, carol];
+        uint256[3] memory bids = [uint256(10e6), uint256(20e6), uint256(30e6)];
+
+        for (uint256 round = 0; round < SEATS; round++) {
+            for (uint256 i = 0; i < 3; i++) {
+                address who = ppl[i];
+                if (circle.hasWon(who)) continue; // auto-advanced, already committed/revealed
+                bytes32 salt = bytes32(uint256(round * 10 + i));
+                vm.prank(who); circle.commit(keccak256(abi.encodePacked(bids[i], salt, who)));
+            }
+            circle.advanceToReveal();
+            for (uint256 i = 0; i < 3; i++) {
+                address who = ppl[i];
+                if (circle.hasWon(who)) continue;
+                bytes32 salt = bytes32(uint256(round * 10 + i));
+                vm.prank(who); circle.reveal(bids[i], salt);
+            }
+            circle.requestDraw();
+            circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked(round))), "");
+
+            uint256 totalClaimable = _claimable(circle, alice)
+                + _claimable(circle, bob)
+                + _claimable(circle, carol);
+            uint256 totalBonds = _bond(circle, alice)
+                + _bond(circle, bob)
+                + _bond(circle, carol);
+            assertEq(
+                stable.balanceOf(address(circle)),
+                totalClaimable + circle.dustAccrued() + circle.undrawnPools() + totalBonds,
+                "conservation invariant violated mid-auction-cycle"
+            );
+        }
+
+        assertEq(uint256(circle.state()), uint256(Circle.State.COMPLETED));
+        assertTrue(circle.hasWon(alice));
+        assertTrue(circle.hasWon(bob));
+        assertTrue(circle.hasWon(carol));
     }
 }
