@@ -64,6 +64,6 @@ contract FillingTimeoutTest is Test {
 
     function test_implementationInitializerLocked() public {
         vm.expectRevert(Circle.AlreadyInitialized.selector);
-        Circle(impl).initialize(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW, address(stable), address(this), address(0));
+        Circle(impl).initialize(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW, address(stable), address(this), address(0), address(0));
     }
 }

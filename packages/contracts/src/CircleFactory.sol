@@ -46,7 +46,7 @@ contract CircleFactory {
         if (bond < (seats - 1) * contribution) revert BondTooLow();
 
         circle = Clones.clone(implementation);
-        Circle(circle).initialize(contribution, seats, bond, mode, stable, address(this), reputation);
+        Circle(circle).initialize(contribution, seats, bond, mode, stable, address(this), reputation, address(0));
         isCircle[circle] = true;
 
         emit CircleCreated(circle, msg.sender, contribution, seats, bond, mode);

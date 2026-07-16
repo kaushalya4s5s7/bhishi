@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IGelatoVRFConsumer} from "./interfaces/IGelatoVRFConsumer.sol";
 
 /// @notice Distribution mechanism for a circle's pot each round.
 enum Mode {
@@ -16,7 +17,7 @@ enum Mode {
 ///         cloned per-circle by CircleFactory.
 ///         M3: FILLING → ACTIVE join flow + FILLING_TIMEOUT refund (LEAK 6).
 ///         M4: commit-reveal rounds + auto-slash with dust bucket (LEAK 3, money shot 3).
-contract Circle is ReentrancyGuard {
+contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     using SafeERC20 for IERC20;
 
     // ─── errors ────────────────────────────────────────────────────────────────
@@ -35,6 +36,11 @@ contract Circle is ReentrancyGuard {
     error RevealWindowOpen();
     error NothingToClaim();
     error CommitPhaseNotComplete();
+    error NotDrawPhase();
+    error NotVrfOperator();
+    error DrawNotRequested();
+    error VrfTimeoutNotElapsed();
+    error DrawAlreadyRequested();
 
     // ─── state enum ────────────────────────────────────────────────────────────
     /// @notice Full lifecycle state machine.
@@ -63,6 +69,7 @@ contract Circle is ReentrancyGuard {
     uint256 public constant COMMIT_WINDOW   = 1 days;
     uint256 public constant REVEAL_WINDOW   = 1 days;
     uint256 public constant MAX_SEATS       = 20;
+    uint256 public constant VRF_TIMEOUT     = 1 days;
 
     // ─── immutable-per-clone config ─────────────────────────────────────────────
     uint256 public contribution;
@@ -72,6 +79,11 @@ contract Circle is ReentrancyGuard {
     address public stable;
     address public factory;
     address public reputation;
+
+    // ─── VRF ──────────────────────────────────────────────────────────────────
+    address public vrfOperator;       // only this address can call fulfillRandomness
+    uint256 public drawRequestedAt;   // timestamp of requestDraw() call; 0 = not pending
+    mapping(address => bool) public hasWon; // true once member received their payout round
 
     // ─── lifecycle ─────────────────────────────────────────────────────────────
     bool    public initialized;
@@ -104,6 +116,9 @@ contract Circle is ReentrancyGuard {
     event Slashed(address indexed defaulter, uint256 bondSlashed, uint256 redistributed);
     event DrawReady(uint256 indexed round);
     event Claimed(address indexed member, uint256 amount);
+    event DrawRequested(uint256 indexed round, uint256 requestedAt);
+    event WinnerDrawn(uint256 indexed round, address indexed winner, uint256 randomness);
+    event Stalled(uint256 indexed round);
 
     // ─── constructor ───────────────────────────────────────────────────────────
     /// @dev Lock the implementation so only clones can ever be initialized.
@@ -119,7 +134,8 @@ contract Circle is ReentrancyGuard {
         Mode    _mode,
         address _stable,
         address _factory,
-        address _reputation
+        address _reputation,
+        address _vrfOperator
     ) external {
         if (initialized) revert AlreadyInitialized();
         if (_seats < 2 || _seats > MAX_SEATS) revert InvalidSeats();
@@ -132,6 +148,7 @@ contract Circle is ReentrancyGuard {
         stable       = _stable;
         factory      = _factory;
         reputation   = _reputation;
+        vrfOperator  = _vrfOperator;
 
         state     = State.FILLING;
         startedAt = block.timestamp;
@@ -326,6 +343,132 @@ contract Circle is ReentrancyGuard {
 
         IERC20(stable).safeTransfer(msg.sender, amount);
         emit Claimed(msg.sender, amount);
+    }
+
+    // ─── requestDraw ───────────────────────────────────────────────────────────
+    /// @notice Permissionless: signal that a VRF draw is needed for the current
+    ///         round. Records the timestamp so reclaimOnStall can fire if VRF
+    ///         goes silent.
+    function requestDraw() external {
+        if (state != State.DRAW) revert NotDrawPhase();
+        if (drawRequestedAt != 0) revert DrawAlreadyRequested();
+        drawRequestedAt = block.timestamp;
+        emit DrawRequested(currentRound, drawRequestedAt);
+    }
+
+    // ─── fulfillRandomness (Gelato VRF callback) ───────────────────────────────
+    /// @notice Called by the VRF operator with verifiable randomness.
+    ///         Picks a winner from eligible (joined && !hasWon) members,
+    ///         credits roundPool to winner's claimable, and advances state.
+    function fulfillRandomness(uint256 /*requestId*/, uint256 randomness, bytes calldata /*extraData*/)
+        external
+        override
+        nonReentrant
+    {
+        // Auth: if vrfOperator is set, only they may call; address(0) = permissionless (tests)
+        if (vrfOperator != address(0) && msg.sender != vrfOperator) revert NotVrfOperator();
+        if (state != State.DRAW) revert NotDrawPhase();
+        if (drawRequestedAt == 0) revert DrawNotRequested();
+
+        // Build eligible list: joined && !hasWon
+        uint256 n = members.length;
+        address[] memory eligible = new address[](n);
+        uint256 eligibleCount = 0;
+        for (uint256 i = 0; i < n; i++) {
+            address m = members[i];
+            if (memberInfo[m].joined && !hasWon[m]) {
+                eligible[eligibleCount++] = m;
+            }
+        }
+
+        // CEI: update state before transfers
+        uint256 winnerIdx = randomness % eligibleCount;
+        address winner = eligible[winnerIdx];
+        hasWon[winner] = true;
+
+        uint256 pot = roundPool;
+        roundPool = 0;
+        memberInfo[winner].claimable += pot;
+
+        emit WinnerDrawn(currentRound, winner, randomness);
+
+        // Determine if this was the last round
+        bool lastRound = (currentRound + 1 == seats);
+        if (!lastRound) {
+            // Check if all remaining joined members have now won
+            uint256 remainingEligible = 0;
+            for (uint256 i = 0; i < n; i++) {
+                if (memberInfo[members[i]].joined && !hasWon[members[i]]) {
+                    remainingEligible++;
+                }
+            }
+            if (remainingEligible == 0) lastRound = true;
+        }
+
+        if (lastRound) {
+            // Return bonds to all members via claimable
+            // TODO M6: call ReputationRegistry.attest(...) here
+            for (uint256 i = 0; i < n; i++) {
+                address m = members[i];
+                if (memberInfo[m].joined && memberInfo[m].stakedBond > 0) {
+                    memberInfo[m].claimable += memberInfo[m].stakedBond;
+                    memberInfo[m].stakedBond = 0;
+                }
+            }
+            state = State.COMPLETED;
+        } else {
+            // Advance to next round: reset per-round state
+            currentRound++;
+            drawRequestedAt = 0;
+            revealCount = 0;
+            for (uint256 i = 0; i < n; i++) {
+                address m = members[i];
+                committed[m] = false;
+                revealed[m]  = false;
+            }
+            roundStart = block.timestamp;
+            state = State.COMMIT;
+            emit RoundStarted(currentRound, roundStart);
+        }
+    }
+
+    // ─── reclaimOnStall (LEAK 1, money shot 4) ─────────────────────────────────
+    /// @notice Permissionless safety valve: if VRF has been silent for
+    ///         VRF_TIMEOUT since requestDraw(), anyone can stall the circle and
+    ///         let members reclaim their funds via claim().
+    function reclaimOnStall() external nonReentrant {
+        if (state != State.DRAW) revert NotDrawPhase();
+        if (drawRequestedAt == 0) revert DrawNotRequested();
+        if (block.timestamp < drawRequestedAt + VRF_TIMEOUT) revert VrfTimeoutNotElapsed();
+
+        // CEI: set terminal state first
+        state = State.STALLED;
+
+        // Count joined members
+        uint256 n = members.length;
+        uint256 joinedCount = 0;
+        for (uint256 i = 0; i < n; i++) {
+            if (memberInfo[members[i]].joined) joinedCount++;
+        }
+
+        // Distribute roundPool pro-rata to joined members; remainder → dust
+        uint256 pool = roundPool;
+        roundPool = 0;
+        uint256 sharePerMember = joinedCount > 0 ? pool / joinedCount : 0;
+        uint256 dust = pool - sharePerMember * joinedCount;
+
+        for (uint256 i = 0; i < n; i++) {
+            address m = members[i];
+            if (memberInfo[m].joined) {
+                // Bond + claimable already theirs; add pro-rata pool share
+                memberInfo[m].claimable += memberInfo[m].stakedBond + sharePerMember;
+                memberInfo[m].stakedBond = 0;
+            }
+        }
+
+        dustAccrued += dust;
+
+        emit Stalled(currentRound);
     }
 
     // ─── internal helpers ──────────────────────────────────────────────────────
