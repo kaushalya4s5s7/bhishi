@@ -34,12 +34,13 @@ contract Circle is ReentrancyGuard {
     error NotMember();
     error RevealWindowOpen();
     error NothingToClaim();
+    error CommitPhaseNotComplete();
 
     // ─── state enum ────────────────────────────────────────────────────────────
     /// @notice Full lifecycle state machine.
     enum State {
         FILLING,
-        ACTIVE,      // transitional (replaced by COMMIT on last join)
+        ACTIVE,      // reserved for future use
         ABORTED_FILLING,
         COMMIT,
         REVEAL,
@@ -224,19 +225,27 @@ contract Circle is ReentrancyGuard {
     }
 
     // ─── advance to reveal ─────────────────────────────────────────────────────
-    /// @notice Anyone can advance phase from COMMIT→REVEAL after COMMIT_WINDOW.
-    ///         (Optional: auto-advance can be triggered by commit if all committed.)
+    /// @notice Advance COMMIT→REVEAL once all active members have committed.
+    ///         Permissionless: anyone can call once the condition is met.
+    ///         Updates roundStart to now so the slash timer is measured from
+    ///         the start of the REVEAL phase (not the COMMIT phase).
     function advanceToReveal() external {
         if (state != State.COMMIT) revert NotCommitPhase();
-        // Move to REVEAL; allow immediately if everyone has committed.
+        // Guard: all active members must have committed before advancing.
+        uint256 n = members.length;
+        for (uint256 i = 0; i < n; i++) {
+            address m = members[i];
+            if (memberInfo[m].joined && !committed[m]) revert CommitPhaseNotComplete();
+        }
+        // Reset roundStart to now so REVEAL_WINDOW / slash timer runs from here.
+        roundStart = block.timestamp;
         state = State.REVEAL;
     }
 
     // ─── reveal ────────────────────────────────────────────────────────────────
-    /// @notice Reveal the pre-image of your commitment.
+    /// @notice Reveal the pre-image of your commitment (REVEAL phase only).
     function reveal(uint256 amount, bytes32 salt) external nonReentrant {
-        // Accept reveal in both COMMIT (early) and REVEAL phases
-        if (state != State.COMMIT && state != State.REVEAL) revert NotRevealPhase();
+        if (state != State.REVEAL) revert NotRevealPhase();
         if (!memberInfo[msg.sender].joined) revert NotMember();
         if (!committed[msg.sender]) revert NotCommitted();
         if (revealed[msg.sender]) revert AlreadyRevealed();
@@ -310,7 +319,7 @@ contract Circle is ReentrancyGuard {
     /// @notice Pull-payment: withdraw accumulated claimable balance. CEI + nonReentrant.
     function claim() external nonReentrant {
         uint256 amount = memberInfo[msg.sender].claimable;
-        if (amount == 0) return; // no revert, idempotent
+        if (amount == 0) revert NothingToClaim();
 
         // CEI: zero before transfer
         memberInfo[msg.sender].claimable = 0;
