@@ -42,6 +42,7 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     error DrawNotRequested();
     error VrfTimeoutNotElapsed();
     error DrawAlreadyRequested();
+    error AuctionNotImplemented();
 
     // ─── state enum ────────────────────────────────────────────────────────────
     /// @notice Full lifecycle state machine.
@@ -140,6 +141,7 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
     ) external {
         if (initialized) revert AlreadyInitialized();
         if (_seats < 2 || _seats > MAX_SEATS) revert InvalidSeats();
+        if (_mode == Mode.AUCTION) revert AuctionNotImplemented();
         initialized = true;
 
         contribution = _contribution;
@@ -330,6 +332,12 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
         dustAccrued += dust;
 
         emit Slashed(defaulter, bondAmount, remainder - dust);
+
+        // FSM fix: if slashing removed the last non-revealer, advance to DRAW.
+        // slash() marks the defaulter as joined=false before this call, so
+        // _checkAllRevealed() sees the reduced active set and fires if everyone
+        // remaining has revealed.
+        if (state == State.REVEAL) _checkAllRevealed();
     }
 
     // ─── claim ─────────────────────────────────────────────────────────────────
@@ -488,22 +496,30 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
             if (memberInfo[members[i]].joined) joinedCount++;
         }
 
-        // Distribute roundPool pro-rata to joined members; remainder → dust
-        uint256 pool = roundPool;
-        roundPool = 0;
+        // Merge stranded dustAccrued from prior slashings into the pool so it
+        // is recoverable by members (not permanently stuck in the contract).
+        uint256 pool = roundPool + dustAccrued;
+        roundPool   = 0;
+        dustAccrued = 0;
         uint256 sharePerMember = joinedCount > 0 ? pool / joinedCount : 0;
         uint256 dust = pool - sharePerMember * joinedCount;
 
+        // Assign remainder dust to first joined member so nothing is stranded.
+        bool dustAssigned = false;
         for (uint256 i = 0; i < n; i++) {
             address m = members[i];
             if (memberInfo[m].joined) {
                 // Bond + claimable already theirs; add pro-rata pool share
                 memberInfo[m].claimable += memberInfo[m].stakedBond + sharePerMember;
                 memberInfo[m].stakedBond = 0;
+                if (!dustAssigned && dust > 0) {
+                    memberInfo[m].claimable += dust;
+                    dustAssigned = true;
+                }
             }
         }
-
-        dustAccrued += dust;
+        // If no joined member (degenerate), re-park dust
+        if (!dustAssigned) dustAccrued = dust;
 
         emit Stalled(currentRound);
     }

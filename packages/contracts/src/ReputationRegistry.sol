@@ -18,6 +18,8 @@ contract ReputationRegistry is IReputationRegistry {
 
     /// @notice Attestation count (circle completions) per member address.
     mapping(address => uint256) public score;
+    /// @notice Deduplication guard: circle → member → already attested.
+    mapping(address => mapping(address => bool)) public hasAttested;
 
     address public immutable factory;
 
@@ -33,6 +35,9 @@ contract ReputationRegistry is IReputationRegistry {
         if (!ICircleFactory(factory).isCircle(msg.sender)) revert NotFactoryCircle();
         // Gate 2: the calling circle must be in COMPLETED state
         if (Circle(msg.sender).state() != Circle.State.COMPLETED) revert NotFactoryCircle();
+        // Gate 3: each (circle, member) pair may only attest once
+        if (hasAttested[msg.sender][member]) revert AlreadyAttested();
+        hasAttested[msg.sender][member] = true;
 
         score[member] += 1;
         emit Attested(msg.sender, member, score[member]);
