@@ -84,10 +84,17 @@
 
 ---
 
-## Part 3 — PHASE A: Working testnet dApp (close the gaps)
+## Part 3 — PHASE A: Working testnet dApp (close the gaps) — ✅ COMPLETE (2026-07-17)
 
 Goal: a user can, from the browser, create a circle, get test funds, join, and run a full
 round against live Monad testnet contracts. Ordered, each milestone independently shippable.
+
+**Status: all four milestones done and committed.** The web app typechecks and
+production-builds cleanly (8 routes); the frontend commit hash was verified byte-for-byte
+against the contract's Solidity `abi.encodePacked` encoding, proving the commit/reveal
+round-trip verifies on-chain. Three latent bugs were found and fixed along the way (wrong
+commit-hash encoding, wrong `reveal` arity, and non-existent `claimable`/`commitOf`/`round`
+getters silently masked by `.catch`).
 
 ### Milestone A1 — Deployed addresses wired in (unblocks everything)
 - Fix **G-S1**: make `sync-abi.ts` preserve existing `addresses.ts` (write zeros only if missing),
