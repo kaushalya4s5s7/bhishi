@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "forge build",
-    "test": "forge test"
+    "test": "forge test",
+    "sync-abi": "pnpm --filter @bhishi/shared sync"
   }
 }
