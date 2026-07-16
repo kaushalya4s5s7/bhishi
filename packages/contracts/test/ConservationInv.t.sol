@@ -143,6 +143,7 @@ contract CircleHandler is Test {
         // the existing pattern used throughout this handler — invalid
         // actions are attempted-and-skipped, not filtered out beforehand,
         // so the revert path is genuinely exercised by the EVM on every run.
+        revealAttempts++;
         try circle.reveal(amount, SALT) {
             revealSuccessCount++;
         } catch (bytes memory reason) {
@@ -153,12 +154,18 @@ contract CircleHandler is Test {
         }
     }
 
+    uint256 public revealAttempts;
     uint256 public revealSuccessCount;
     uint256 public revealRevertCount;
     uint256 public capRevertCount;
 
-    function slash(uint256 actorIdx) external {
+    function slash(uint256 actorIdx, uint256 gateSeed) external {
         if (uint256(circle.state()) != uint256(Circle.State.REVEAL)) return;
+        // Gate the timeout-triggering warp so it doesn't fire on nearly every
+        // call: this gives the FSM many chances to have every active member
+        // reveal() before a stray warp forces an abort. The gate still lets
+        // the warp fire (1-in-20) so the slash/timeout path stays covered.
+        if (gateSeed % 20 != 0) return;
         actorIdx = actorIdx % actors.length;
         address defaulter = actors[actorIdx];
         if (!_isJoined(defaulter)) return;
@@ -194,8 +201,15 @@ contract CircleHandler is Test {
         try circle.claim() {} catch {}
     }
 
-    function refundFilling() external {
+    function refundFilling(uint256 gateSeed) external {
         if (uint256(circle.state()) != uint256(Circle.State.FILLING)) return;
+        // Same gating rationale as slash(): without this, the fuzzer warps
+        // past FILLING to ABORTED_FILLING almost immediately on essentially
+        // every campaign (join() needs 3 separate calls to land first),
+        // so COMMIT/REVEAL/DRAW are never reached. Gate to 1-in-20 so join()
+        // has room to complete across the other ~19/20 calls first, while
+        // still eventually covering the FILLING-timeout/refund path.
+        if (gateSeed % 20 != 0) return;
         vm.warp(block.timestamp + circle.FILLING_TIMEOUT() + 1);
         try circle.refundFilling() {} catch {}
     }
@@ -283,6 +297,10 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
         handler = new CircleHandler(circle, stable);
 
         targetContract(address(handler));
+
+        // Clear any stale campaign-accumulator file from an interrupted
+        // previous run (see afterInvariant() below).
+        try vm.removeFile(LOG_PATH) {} catch {}
     }
 
     function _checkConservation(Circle c) internal view {
@@ -312,5 +330,68 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
     ///         reveal action across the fuzzer's random call sequence.
     function invariant_conservationHoldsAuction() public view {
         _checkConservation(circle);
+    }
+
+    /// @notice Regression guard for the "rubber stamp" failure mode: if the
+    ///         handler's action-selection bias regresses such that reveal()
+    ///         (and therefore the bid-cap/tie/zero-bid logic) is never
+    ///         actually invoked by the fuzzer, this fails loudly instead of
+    ///         the invariant silently "passing" on an untested code path.
+    // Persistent (file-backed) accumulators. Foundry reverts contract/EVM
+    // storage back to the post-setUp() snapshot before each independent
+    // invariant run, so a handler-storage counter only ever reflects the
+    // LAST run, not the whole campaign — a single unlucky final run (which
+    // legitimately happens sometimes; not every run reaches REVEAL) would
+    // make a naive per-run assertion flaky. The filesystem is the only
+    // cheatcode-accessible state that survives vm snapshot reverts, so we
+    // use it to accumulate real totals across the whole fuzz campaign and
+    // assert on the aggregate only once, after the final run.
+    string constant LOG_PATH = "./cache/auction_campaign_accumulator.log";
+
+    function afterInvariant() public {
+        uint256 prevRuns;
+        uint256 prevRevealOk;
+        uint256 prevCapRev;
+        try vm.readFile(LOG_PATH) returns (string memory content) {
+            (prevRuns, prevRevealOk, prevCapRev) = _parseLog(content);
+        } catch {}
+
+        uint256 runs = prevRuns + 1;
+        uint256 revealOk = prevRevealOk + handler.revealSuccessCount();
+        uint256 capRev = prevCapRev + handler.capRevertCount();
+
+        vm.writeFile(LOG_PATH, string.concat(
+            vm.toString(runs), " ", vm.toString(revealOk), " ", vm.toString(capRev)
+        ));
+
+        // forge-config: default.invariant-runs = 256
+        uint256 totalRuns = 256;
+        if (runs >= totalRuns) {
+            // Final run of the campaign: assert on the accumulated totals.
+            // This is the regression guard for the exact "rubber stamp"
+            // failure mode the reviewer caught: if the handler's action
+            // bias regresses such that reveal()/the cap-revert path is
+            // never actually invoked across the ENTIRE campaign, fail loudly
+            // here instead of silently passing.
+            assertGt(revealOk, 0, "reveal() was never successfully invoked across the whole fuzz campaign");
+            assertGt(capRev, 0, "over-cap bid revert path was never exercised across the whole fuzz campaign");
+            vm.removeFile(LOG_PATH);
+        }
+    }
+
+    function _parseLog(string memory content) internal pure returns (uint256 runs, uint256 revealOk, uint256 capRev) {
+        bytes memory b = bytes(content);
+        uint256 i;
+        (runs, i) = _parseUint(b, 0);
+        (revealOk, i) = _parseUint(b, i + 1);
+        (capRev, ) = _parseUint(b, i + 1);
+    }
+
+    function _parseUint(bytes memory b, uint256 start) internal pure returns (uint256 value, uint256 i) {
+        i = start;
+        while (i < b.length && b[i] != 0x20) {
+            value = value * 10 + (uint8(b[i]) - 48);
+            i++;
+        }
     }
 }
