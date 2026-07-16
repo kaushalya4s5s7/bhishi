@@ -38,7 +38,8 @@ contract FillingTest is Test {
             vm.prank(m);
             circle.join();
         }
-        assertEq(uint256(circle.state()), uint256(Circle.State.ACTIVE));
+        // M4: last join transitions directly to COMMIT (skip transient ACTIVE)
+        assertEq(uint256(circle.state()), uint256(Circle.State.COMMIT));
         assertEq(circle.memberCount(), SEATS);
     }
 
