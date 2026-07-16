@@ -3,25 +3,57 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --ink: #0b0b0e;
+  --panel: #1f1d22;
+  --paper: #faf9f6;
+  --brass: #c9a15c;
+  --graphite: #6b6470;
+  --background: var(--paper);
+  --foreground: var(--ink);
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  .font-display {
+    font-family: var(--font-display), sans-serif;
+  }
+
+  .ledger-rule {
+    background-image: repeating-linear-gradient(
+      to right,
+      currentColor 0,
+      currentColor 1px,
+      transparent 1px,
+      transparent 10px
+    );
+    height: 1px;
+    opacity: 0.35;
+  }
+
+  .animate-marquee {
+    animation: marquee 32s linear infinite;
+  }
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none;
   }
 }
