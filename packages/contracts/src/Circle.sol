@@ -166,9 +166,8 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
         }
     }
 
-    /// @notice Round pool not yet paid out (M6 conservation invariant).
+    /// @notice Round pool not yet paid out (conservation invariant).
     function undrawnPools() external view returns (uint256) {
-        // Payout not yet implemented (M5); expose roundPool as proxy.
         return roundPool;
     }
 
@@ -381,6 +380,14 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
             }
         }
 
+        // Guard: if all members were slashed before VRF fired, no one is eligible.
+        // Transition to STALLED so members can recover via reclaimOnStall().
+        if (eligibleCount == 0) {
+            state = State.STALLED;
+            emit Stalled(currentRound);
+            return;
+        }
+
         // CEI: update state before transfers
         uint256 winnerIdx = randomness % eligibleCount;
         address winner = eligible[winnerIdx];
@@ -392,7 +399,10 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
 
         emit WinnerDrawn(currentRound, winner, randomness);
 
-        // Determine if this was the last round
+        // Determine if this was the last round.
+        // Fast-path: round index matches seat count (assumes no slashing removed members).
+        // Fallback: remainingEligible==0 catches the case where slashed members reduced
+        // the active set such that everyone who can win has already won.
         bool lastRound = (currentRound + 1 == seats);
         if (!lastRound) {
             // Check if all remaining joined members have now won
@@ -415,6 +425,7 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
                     memberInfo[m].stakedBond = 0;
                 }
             }
+            drawRequestedAt = 0;
             state = State.COMPLETED;
         } else {
             // Advance to next round: reset per-round state

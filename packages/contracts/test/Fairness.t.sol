@@ -145,4 +145,33 @@ contract FairnessTest is Test {
         // Final state should be COMPLETED
         assertEq(uint256(circle.state()), uint256(Circle.State.COMPLETED));
     }
+
+    /// If all members have hasWon==true (e.g. slashed/removed mid-cycle edge case),
+    /// fulfillRandomness should transition to STALLED rather than panic on mod-by-zero.
+    function test_fulfillRandomnessWithNoEligibleMembersStalls() public {
+        _commitRevealAll(200);
+        assertEq(uint256(circle.state()), uint256(Circle.State.DRAW));
+        circle.requestDraw();
+
+        // Force hasWon = true for all members via vm.store so eligibleCount == 0.
+        // hasWon mapping slot: keccak256(abi.encode(addr, slotIndex))
+        // hasWon is the 4th new storage var after vrfOperator(slot N), drawRequestedAt(N+1), hasWon(N+2).
+        // Rather than calculating slots, we use a simpler approach: fulfill once to mark
+        // the first winner, then manually set hasWon for remaining two via store.
+        // Actually simplest: just use cheatcode store on each member's hasWon slot.
+
+        // hasWon is at storage slot 8 (verified via `forge inspect Circle storage`).
+        // For a mapping: element slot = keccak256(abi.encode(key, mappingSlot))
+        uint256 hasWonSlot = 8;
+        for (uint256 i = 0; i < addrs.length; i++) {
+            bytes32 slot = keccak256(abi.encode(addrs[i], hasWonSlot));
+            vm.store(address(circle), slot, bytes32(uint256(1)));
+            assertTrue(circle.hasWon(addrs[i]), "vm.store did not set hasWon");
+        }
+
+        // Now fulfillRandomness should see eligibleCount==0 and stall
+        vrf.fulfill(address(circle), 99, 12345);
+        assertEq(uint256(circle.state()), uint256(Circle.State.STALLED),
+            "should transition to STALLED when no eligible members");
+    }
 }
