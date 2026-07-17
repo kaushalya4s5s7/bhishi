@@ -207,8 +207,11 @@ model Invite {
   circle        Circle       @relation(fields: [circleAddress], references: [address], onDelete: Cascade)
   circleAddress String
   kind          InviteKind
-  /// Present for EMAIL invites; null for the general LINK.
-  email         String?
+  /// Present for EMAIL invites; '' (sentinel) for the general LINK. Postgres
+  /// unique indexes treat NULL as distinct from every other NULL, so a nullable
+  /// email would let concurrent calls mint duplicate LINK rows; using '' for
+  /// LINK makes the unique constraint below actually dedupe both kinds.
+  email         String       @default("")
   /// Creator's lowercased wallet address (the only role allowed to invite).
   invitedBy     String
   status        InviteStatus @default(PENDING)
@@ -217,6 +220,7 @@ model Invite {
   consumedAt    DateTime?
   createdAt     DateTime     @default(now())
 
+  @@unique([circleAddress, kind, email])
   @@index([circleAddress])
   @@index([email])
 }

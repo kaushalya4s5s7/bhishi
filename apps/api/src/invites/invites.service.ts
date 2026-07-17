@@ -52,24 +52,25 @@ export class InvitesService {
       throw new ForbiddenException('Only the circle creator can send invites');
     }
 
-    let link = await this.prisma.invite.findFirst({ where: { circleAddress, kind: 'LINK' } });
-    if (!link) {
-      link = await this.prisma.invite.create({
-        data: { token: this.newToken(), circleAddress, kind: 'LINK', invitedBy: callerAddr },
-      });
-    }
+    // '' is the sentinel email for LINK invites — see schema.prisma for why NULL
+    // can't be used to dedupe. upsert() on the (circleAddress, kind, email)
+    // unique constraint makes concurrent createInvites calls converge on the
+    // same row instead of racing to create duplicates.
+    const link = await this.prisma.invite.upsert({
+      where: { circleAddress_kind_email: { circleAddress, kind: 'LINK', email: '' } },
+      update: {},
+      create: { token: this.newToken(), circleAddress, kind: 'LINK', email: '', invitedBy: callerAddr },
+    });
 
     const emails = dto.emails ?? [];
+    const uniqueEmails = [...new Set(emails.map(raw => raw.trim().toLowerCase()).filter(Boolean))];
     const invited: { email: string; url: string }[] = [];
-    for (const raw of emails) {
-      const email = raw.trim().toLowerCase();
-      if (!email) continue;
-      let row = await this.prisma.invite.findFirst({ where: { circleAddress, kind: 'EMAIL', email } });
-      if (!row) {
-        row = await this.prisma.invite.create({
-          data: { token: this.newToken(), circleAddress, kind: 'EMAIL', email, invitedBy: callerAddr },
-        });
-      }
+    for (const email of uniqueEmails) {
+      const row = await this.prisma.invite.upsert({
+        where: { circleAddress_kind_email: { circleAddress, kind: 'EMAIL', email } },
+        update: {},
+        create: { token: this.newToken(), circleAddress, kind: 'EMAIL', email, invitedBy: callerAddr },
+      });
       const url = this.buildUrl(circleAddress, row.token);
       await this.email.sendCircleInvite({ to: email, circleAddress, inviteUrl: url, inviter: callerAddr });
       invited.push({ email, url });

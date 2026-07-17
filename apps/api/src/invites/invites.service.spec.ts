@@ -8,9 +8,8 @@ import { InvitesService } from './invites.service';
 describe('InvitesService', () => {
   const circleFindUnique = jest.fn();
   const memberCount = jest.fn();
-  const inviteFindFirst = jest.fn();
   const inviteFindUnique = jest.fn();
-  const inviteCreate = jest.fn();
+  const inviteUpsert = jest.fn();
   const inviteUpdate = jest.fn();
   const sendCircleInvite = jest.fn();
 
@@ -26,9 +25,8 @@ describe('InvitesService', () => {
             circle: { findUnique: circleFindUnique },
             member: { count: memberCount },
             invite: {
-              findFirst: inviteFindFirst,
               findUnique: inviteFindUnique,
-              create: inviteCreate,
+              upsert: inviteUpsert,
               update: inviteUpdate,
             },
           },
@@ -39,12 +37,11 @@ describe('InvitesService', () => {
   }
 
   beforeEach(() => {
-    [circleFindUnique, memberCount, inviteFindFirst, inviteFindUnique, inviteCreate, inviteUpdate, sendCircleInvite]
+    [circleFindUnique, memberCount, inviteFindUnique, inviteUpsert, inviteUpdate, sendCircleInvite]
       .forEach(m => m.mockReset());
     circleFindUnique.mockResolvedValue({ address: '0xcircle', creator: '0xcreator', seats: 2, state: 'FILLING' });
     memberCount.mockResolvedValue(0);
-    inviteFindFirst.mockResolvedValue(null);
-    inviteCreate.mockImplementation(({ data }: any) => Promise.resolve({ ...data }));
+    inviteUpsert.mockImplementation(({ create }: any) => Promise.resolve({ ...create }));
   });
 
   it('rejects a caller who is not the circle creator', async () => {
@@ -60,22 +57,51 @@ describe('InvitesService', () => {
       { circleAddress: '0xCircle', emails: ['a@b.com', 'c@d.com'] },
       '0xCreator',
     );
-    const kinds = inviteCreate.mock.calls.map(c => c[0].data.kind);
-    expect(kinds.filter(k => k === 'LINK')).toHaveLength(1);
-    expect(kinds.filter(k => k === 'EMAIL')).toHaveLength(2);
+    const kinds = inviteUpsert.mock.calls.map((c: any) => c[0].create.kind);
+    expect(kinds.filter((k: string) => k === 'LINK')).toHaveLength(1);
+    expect(kinds.filter((k: string) => k === 'EMAIL')).toHaveLength(2);
     expect(sendCircleInvite).toHaveBeenCalledTimes(2);
     expect(res.linkUrl).toContain('/circle/0xcircle?invite=');
     expect(res.invited).toHaveLength(2);
+
+    // Each upsert is keyed on the unique constraint (circleAddress, kind, email).
+    const linkCall = inviteUpsert.mock.calls.find((c: any) => c[0].create.kind === 'LINK')[0];
+    expect(linkCall.where).toEqual({
+      circleAddress_kind_email: { circleAddress: '0xcircle', kind: 'LINK', email: '' },
+    });
+    const emailCall = inviteUpsert.mock.calls.find((c: any) => c[0].create.email === 'a@b.com')[0];
+    expect(emailCall.where).toEqual({
+      circleAddress_kind_email: { circleAddress: '0xcircle', kind: 'EMAIL', email: 'a@b.com' },
+    });
   });
 
   it('reuses an existing LINK instead of minting a second one', async () => {
-    inviteFindFirst.mockImplementation(({ where }: any) =>
-      where.kind === 'LINK' ? Promise.resolve({ token: 'existing', kind: 'LINK' }) : Promise.resolve(null),
+    inviteUpsert.mockImplementation(({ where }: any) =>
+      where.circleAddress_kind_email.kind === 'LINK'
+        ? Promise.resolve({ token: 'existing', kind: 'LINK' })
+        : Promise.resolve({ token: 'new-email-token' }),
     );
     const svc = await make();
     const res = await svc.createInvites({ circleAddress: '0xCircle' }, '0xcreator');
-    expect(inviteCreate.mock.calls.filter(c => c[0].data.kind === 'LINK')).toHaveLength(0);
+    expect(inviteUpsert).toHaveBeenCalledTimes(1);
+    const call = inviteUpsert.mock.calls[0][0];
+    expect(call.where).toEqual({
+      circleAddress_kind_email: { circleAddress: '0xcircle', kind: 'LINK', email: '' },
+    });
+    expect(call.update).toEqual({});
     expect(res.linkUrl).toContain('invite=existing');
+  });
+
+  it('dedupes duplicate emails within a single call before upserting', async () => {
+    const svc = await make();
+    const res = await svc.createInvites(
+      { circleAddress: '0xCircle', emails: ['a@b.com', 'A@B.com', ' a@b.com '] },
+      '0xcreator',
+    );
+    const emailUpserts = inviteUpsert.mock.calls.filter((c: any) => c[0].create.kind === 'EMAIL');
+    expect(emailUpserts).toHaveLength(1);
+    expect(sendCircleInvite).toHaveBeenCalledTimes(1);
+    expect(res.invited).toHaveLength(1);
   });
 
   it('validate() returns full=reason when the circle has no open seats', async () => {
