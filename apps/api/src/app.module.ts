@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
+import { CirclesModule } from './circles/circles.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { WaitlistModule } from './waitlist/waitlist.module';
     AuthModule,
     HealthModule,
     WaitlistModule,
+    CirclesModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

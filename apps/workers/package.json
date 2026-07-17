@@ -1,0 +1,32 @@
+{
+  "name": "@bhishi/workers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev:indexer": "tsx watch src/indexer.ts",
+    "dev:keeper": "tsx watch src/vrf-keeper.ts",
+    "dev:notify": "tsx watch src/notify.ts",
+    "start:indexer": "node dist/indexer.js",
+    "start:keeper": "node dist/vrf-keeper.js",
+    "start:notify": "node dist/notify.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@bhishi/db": "workspace:*",
+    "@bhishi/events": "workspace:*",
+    "@bhishi/shared": "workspace:*",
+    "bullmq": "^5.34.6",
+    "ioredis": "^5.4.2",
+    "pino": "^9.6.0",
+    "viem": "^2.55.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.1.8"
+  }
+}
