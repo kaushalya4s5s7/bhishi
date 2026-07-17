@@ -5,6 +5,10 @@
     "stateMutability": "nonpayable"
   },
   {
+    "type": "receive",
+    "stateMutability": "payable"
+  },
+  {
     "type": "function",
     "name": "COMMIT_WINDOW",
     "inputs": [],
@@ -20,6 +24,19 @@
   {
     "type": "function",
     "name": "FILLING_TIMEOUT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_BID_DISCOUNT_BPS",
     "inputs": [],
     "outputs": [
       {
@@ -71,10 +88,52 @@
   },
   {
     "type": "function",
+    "name": "_entropyCallback",
+    "inputs": [
+      {
+        "name": "sequence",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "provider",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "randomNumber",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "advanceToReveal",
     "inputs": [],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "bidDiscount",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -162,6 +221,19 @@
   },
   {
     "type": "function",
+    "name": "creator",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "currentRound",
     "inputs": [],
     "outputs": [
@@ -201,7 +273,7 @@
   },
   {
     "type": "function",
-    "name": "factory",
+    "name": "entropyContract",
     "inputs": [],
     "outputs": [
       {
@@ -214,26 +286,16 @@
   },
   {
     "type": "function",
-    "name": "fulfillRandomness",
-    "inputs": [
+    "name": "factory",
+    "inputs": [],
+    "outputs": [
       {
         "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "randomness",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "",
-        "type": "bytes",
-        "internalType": "bytes"
+        "type": "address",
+        "internalType": "address"
       }
     ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -294,7 +356,12 @@
         "internalType": "address"
       },
       {
-        "name": "_vrfOperator",
+        "name": "_entropy",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_creator",
         "type": "address",
         "internalType": "address"
       }
@@ -604,13 +671,26 @@
   },
   {
     "type": "function",
-    "name": "vrfOperator",
+    "name": "vrfFeeEstimate",
     "inputs": [],
     "outputs": [
       {
         "name": "",
-        "type": "address",
-        "internalType": "address"
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "vrfSequenceNumber",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -801,6 +881,50 @@
   },
   {
     "type": "event",
+    "name": "VrfFunded",
+    "inputs": [
+      {
+        "name": "from",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "VrfRefunded",
+    "inputs": [
+      {
+        "name": "to",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "ok",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "WinnerDrawn",
     "inputs": [
       {
@@ -846,6 +970,11 @@
   },
   {
     "type": "error",
+    "name": "BidExceedsCap",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "CommitPhaseNotComplete",
     "inputs": []
   },
@@ -862,6 +991,11 @@
   {
     "type": "error",
     "name": "FillingNotTimedOut",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientVrfFunding",
     "inputs": []
   },
   {
@@ -902,11 +1036,6 @@
   {
     "type": "error",
     "name": "NotRevealPhase",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NotVrfOperator",
     "inputs": []
   },
   {

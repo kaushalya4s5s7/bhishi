@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { parseEventLogs } from 'viem';
+import { formatEther, parseEventLogs } from 'viem';
 import { addresses, circleFactoryAbi } from '@/lib/contracts';
 import { publicClient, getWalletClient } from '@/lib/wallet';
 
@@ -27,6 +27,23 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
   const [mode, setMode] = useState<Mode>(0);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const [vrfQuote, setVrfQuote] = useState<bigint | null>(null);
+
+  // Quote the MON needed to sponsor every draw, so the creator sees the cost
+  // before signing rather than being surprised by a value-bearing tx.
+  useEffect(() => {
+    let cancelled = false;
+    publicClient
+      .readContract({
+        address: addresses.monadTestnet.factory,
+        abi: circleFactoryAbi as any,
+        functionName: 'vrfFundingFor',
+        args: [BigInt(seats)],
+      })
+      .then(q => { if (!cancelled) setVrfQuote(q as bigint); })
+      .catch(() => { if (!cancelled) setVrfQuote(null); });
+    return () => { cancelled = true; };
+  }, [seats]);
 
   // Mirror on-chain bond gate: bond >= (seats-1) * contribution
   const minBond = (seats - 1) * contribution;
@@ -40,12 +57,24 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
     setCreating(true);
     setError('');
     try {
+      // The circle sponsors its own Pyth Entropy fee for every draw, so members
+      // never spend native MON. Fund all `seats` rounds up front in this same tx
+      // — otherwise requestDraw() later reverts with InsufficientVrfFunding.
+      // Leftover MON is refunded to the creator when the circle completes.
+      const vrfFunding = (await publicClient.readContract({
+        address: addresses.monadTestnet.factory,
+        abi: circleFactoryAbi as any,
+        functionName: 'vrfFundingFor',
+        args: [BigInt(seats)],
+      })) as bigint;
+
       const wc = await getWalletClient(embeddedWallet, userAddress);
       const hash = await wc.writeContract({
         address: addresses.monadTestnet.factory,
         abi: circleFactoryAbi as any,
         functionName: 'createCircle',
         args: [toUnits(contribution), BigInt(seats), toUnits(bond), mode],
+        value: vrfFunding,
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
@@ -112,8 +141,16 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
         className="w-full py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition disabled:opacity-50">
         {creating ? 'Creating...' : authenticated ? 'Create Circle' : 'Login & Create'}
       </button>
+      {vrfQuote !== null && vrfQuote > 0n && (
+        <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+          <span className="font-medium text-gray-700">Randomness funding: {formatEther(vrfQuote)} MON</span>
+          <br />
+          You pre-pay the verifiable-randomness fee for all {seats} draws, so members never
+          need MON to play. Anything unused is refunded to you when the circle completes.
+        </div>
+      )}
       <p className="text-xs text-gray-400">
-        Creating a circle is free (just gas). You join and stake your bond as a separate step afterward.
+        You join and stake your bond as a separate step afterward.
       </p>
     </div>
   );
