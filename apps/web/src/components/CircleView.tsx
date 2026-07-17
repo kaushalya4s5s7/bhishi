@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+import { usePrivy } from '@privy-io/react-auth';
 import { circleAbi } from '@/lib/contracts';
 import { publicClient } from '@/lib/wallet';
 import { useMember } from '@/lib/member';
@@ -8,6 +9,7 @@ import { computeCommitment, secretToSalt, checkRevealWillSucceed } from '@/lib/c
 import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
 import { apiUrl } from '@/lib/api';
+import { validateInvite, consumeInvite, type ValidateResult } from '@/lib/invites';
 import { AuthGate } from '@/components/AuthGate';
 import { InvitePanel } from '@/components/InvitePanel';
 import { Button, Card, Eyebrow, PhaseBadge, SeatRing, SectionLabel, truncate } from '@/components/ui';
@@ -20,12 +22,16 @@ const INPUT_CLS =
 
 interface CircleViewProps {
   circleAddress: `0x${string}`;
+  inviteToken?: string;
 }
 
-export function CircleView({ circleAddress }: CircleViewProps) {
+export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // Single source of truth for the member's on-chain identity + how their txs
   // are sent. Never read a wallet address any other way here — see lib/member.ts.
   const { address: userAddress, write } = useMember();
+  const { getAccessToken } = usePrivy();
+  const [inviteState, setInviteState] = useState<ValidateResult | null>(null);
+  const [consumed, setConsumed] = useState(false);
 
   const [state, setState] = useState<number | null>(null);
   const [seats, setSeats] = useState<number>(0);
@@ -108,6 +114,21 @@ export function CircleView({ circleAddress }: CircleViewProps) {
     const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
   }, [load]);
+
+  useEffect(() => {
+    if (!inviteToken) return;
+    let cancelled = false;
+    validateInvite(inviteToken).then(r => { if (!cancelled) setInviteState(r); });
+    return () => { cancelled = true; };
+  }, [inviteToken]);
+
+  useEffect(() => {
+    if (!inviteToken || consumed) return;
+    const joined = members.some(m => m.toLowerCase() === userAddress?.toLowerCase());
+    if (!joined) return;
+    setConsumed(true);
+    getAccessToken().then(t => consumeInvite(t, inviteToken));
+  }, [inviteToken, consumed, members, userAddress, getAccessToken]);
 
   async function doWrite(functionName: string, args: any[] = []) {
     setTxPending(true);
@@ -212,8 +233,27 @@ export function CircleView({ circleAddress }: CircleViewProps) {
   })();
 
   return (
-    <AuthGate title="Sign in to join this circle" blurb="You'll need a wallet to join, commit, and claim. Signing in creates one for you.">
+    <AuthGate
+      title={inviteState?.valid ? 'You’re invited — sign in to join' : 'Sign in to join this circle'}
+      blurb={
+        inviteState?.valid
+          ? 'Someone invited you to this savings circle. Sign in (we create your wallet) and you’ll land right on the join step.'
+          : "You'll need a wallet to join, commit, and claim. Signing in creates one for you."
+      }
+    >
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-14 space-y-6">
+      {inviteState && !inviteState.valid && (
+        <div className="text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-sm px-4 py-3">
+          {inviteState.reason === 'full'
+            ? 'This circle is now full — the invite link is no longer active.'
+            : 'This invite link is no longer valid, but you can still view the circle below.'}
+        </div>
+      )}
+      {inviteState?.valid && (
+        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-sm px-4 py-3">
+          You’ve been invited to this circle. Join below to claim your seat.
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>
