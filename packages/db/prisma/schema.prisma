@@ -57,6 +57,7 @@ model Circle {
   members Member[]
   rounds  Round[]
   events  ChainEvent[]
+  invites Invite[]
 
   @@index([state])
   @@index([creator])
@@ -179,6 +180,45 @@ model NotificationLog {
 
   @@index([userAddress])
   @@index([status])
+}
+
+/// Off-chain invitation to a circle. On-chain is open (anyone can join), so an
+/// Invite gates the *UI/attribution*, never the contract. Two kinds:
+///  - LINK: one reusable link per circle the creator shares with a group.
+///  - EMAIL: one token per invited email, sent via Resend at creation time.
+/// Validity is capacity-bounded: a LINK/EMAIL token is only "valid" while the
+/// circle still has open seats (indexed member count < Circle.seats and the
+/// circle is still FILLING). Computed at validation time — no counter to drift.
+enum InviteKind {
+  LINK
+  EMAIL
+}
+
+enum InviteStatus {
+  PENDING
+  CONSUMED
+  REVOKED
+}
+
+model Invite {
+  id            String       @id @default(cuid())
+  /// URL-safe random token (crypto.randomBytes(24).toString('base64url')). Unique.
+  token         String       @unique
+  circle        Circle       @relation(fields: [circleAddress], references: [address], onDelete: Cascade)
+  circleAddress String
+  kind          InviteKind
+  /// Present for EMAIL invites; null for the general LINK.
+  email         String?
+  /// Creator's lowercased wallet address (the only role allowed to invite).
+  invitedBy     String
+  status        InviteStatus @default(PENDING)
+  /// Lowercased address that consumed it, set on first join via the link.
+  consumedBy    String?
+  consumedAt    DateTime?
+  createdAt     DateTime     @default(now())
+
+  @@index([circleAddress])
+  @@index([email])
 }
 
 /// Singleton-ish cursor for the factory scan (new CircleCreated events), so the
