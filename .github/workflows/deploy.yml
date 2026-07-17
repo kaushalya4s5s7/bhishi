@@ -1,0 +1,74 @@
+name: Deploy
+
+# Manual by default. Flip the `push` trigger on once you have a target host.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+jobs:
+  deploy:
+    name: Build images + deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.api
+          push: true
+          tags: ghcr.io/${{ github.repository }}/api:${{ github.sha }},ghcr.io/${{ github.repository }}/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build + push workers
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile.workers
+          push: true
+          tags: ghcr.io/${{ github.repository }}/workers:${{ github.sha }},ghcr.io/${{ github.repository }}/workers:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Migrations run BEFORE the new containers start, so a rolled-out image
+      # never hits a schema it doesn't know about.
+      - name: Run database migrations
+        if: ${{ secrets.DATABASE_URL != '' }}
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @bhishi/db exec prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Deploy to host
+        if: ${{ secrets.DEPLOY_HOST != '' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            docker compose -f infra/docker-compose.yml pull
+            docker compose -f infra/docker-compose.yml up -d
+            docker image prune -f
+
+# Contract deploys are deliberately NOT automated. A fund-custodying deploy
+# should never be a side effect of a green CI run — use:
+#   VRF_OPERATOR=... forge script script/Deploy.s.sol --broadcast --verify

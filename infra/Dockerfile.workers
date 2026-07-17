@@ -1,0 +1,31 @@
+# Multi-stage build for apps/workers (indexer + notify).
+# One image, three roles — the compose `command` selects which entrypoint runs,
+# so a crashing notifier can never stall indexing.
+# Build from the repo root: docker build -f infra/Dockerfile.workers ..
+FROM node:22-alpine AS base
+RUN corepack enable
+WORKDIR /repo
+
+FROM base AS deps
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY apps/workers/package.json apps/workers/
+COPY packages/db/package.json packages/db/
+COPY packages/shared/package.json packages/shared/
+COPY packages/events/package.json packages/events/
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY packages/ packages/
+COPY apps/workers/ apps/workers/
+RUN pnpm --filter @bhishi/db generate
+RUN pnpm --filter @bhishi/workers exec tsc
+
+FROM base AS runtime
+ENV NODE_ENV=production
+COPY --from=build /repo/node_modules ./node_modules
+COPY --from=build /repo/packages ./packages
+COPY --from=build /repo/apps/workers/dist ./apps/workers/dist
+COPY --from=build /repo/apps/workers/node_modules ./apps/workers/node_modules
+WORKDIR /repo/apps/workers
+# Overridden per service in docker-compose.yml.
+CMD ["node", "dist/indexer.js"]

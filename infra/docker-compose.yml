@@ -1,0 +1,94 @@
+# Full Bhishi off-chain topology: API, indexer, notifier, Postgres, Redis.
+#
+# Run from the repo root so the build context includes the pnpm workspace:
+#   docker compose -f infra/docker-compose.yml --env-file infra/.env up -d --build
+#
+# The frontend is intentionally absent — it deploys to Vercel. This file is the
+# stateful/backend half.
+#
+# NOTE: on-chain remains the source of truth. If every service here dies, member
+# funds are still recoverable via the contracts' permissionless reclaim paths.
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://bhishi:bhishi@postgres:5432/bhishi?schema=public
+      REDIS_URL: redis://redis:6379
+      PORT: 4000
+    ports: ['4000:4000']
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:4000/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  worker-indexer:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.workers
+    command: ['node', 'dist/indexer.js']
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://bhishi:bhishi@postgres:5432/bhishi?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker-notify:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.workers
+    command: ['node', 'dist/notify.js']
+    # Separate process from the indexer so a provider outage can't stall
+    # chain indexing.
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://bhishi:bhishi@postgres:5432/bhishi?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  # Dev / small-scale prod only. For anything holding real value, point
+  # DATABASE_URL at a managed instance (Neon/Supabase) for backups + PITR.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bhishi
+      POSTGRES_PASSWORD: bhishi
+      POSTGRES_DB: bhishi
+    volumes: ['pgdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bhishi -d bhishi']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Persist the queue so delayed reminder jobs survive a restart.
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes: ['redisdata:/data']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

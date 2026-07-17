@@ -19,3 +19,6 @@ cache/
 
 # Note: packages/contracts/lib is committed so `forge build` is reproducible
 # without needing `forge install`.
+
+# infra secrets
+infra/.env

@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main, bhishi-impl]
+  pull_request:
+
+# A newer push to the same branch makes older runs pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Contracts (forge test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build
+        run: forge build --sizes
+
+      # The suite includes the conservation invariant fuzzer (256 runs x ~128k
+      # calls) — the thing that actually proves money can't be created or lost.
+      - name: Test
+        run: forge test -vv
+
+  web:
+    name: Web + packages (typecheck, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # packages/db exports a Prisma client that must be generated before
+      # anything importing @bhishi/db can typecheck.
+      - name: Generate Prisma client
+        run: pnpm --filter @bhishi/db generate
+
+      - name: Typecheck
+        run: pnpm --filter web exec tsc --noEmit
+
+      - name: Build web
+        run: pnpm --filter web build
+        env:
+          # Build-time placeholders — the app reads real values at runtime.
+          NEXT_PUBLIC_PRIVY_APP_ID: placeholder-ci
+          NEXT_PUBLIC_MONAD_RPC_URL: https://testnet-rpc.monad.xyz
+
+  workers:
+    name: Workers (typecheck, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/workers
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - run: pnpm --filter @bhishi/db generate
+        working-directory: .
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Test
+        run: pnpm exec vitest run
+
+  api:
+    name: API (typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - run: pnpm --filter @bhishi/db generate
+        working-directory: .
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Test
+        run: pnpm exec jest
+
+      - name: Build
+        run: pnpm exec nest build
