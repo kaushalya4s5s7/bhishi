@@ -58,6 +58,24 @@ export class EnvironmentVariables {
   @IsInt()
   SPONSOR_DAILY_CAP = 3;
 
+  /** Resend API key for sending invite emails. If unset, the EmailService logs
+   *  the email to the console instead of sending (local-dev friendly). */
+  @IsString()
+  @IsOptional()
+  RESEND_API_KEY?: string;
+
+  /** From-address for invite emails. Defaults to Resend's shared onboarding
+   *  sender so it works before a domain is verified. */
+  @IsString()
+  @IsOptional()
+  EMAIL_FROM?: string;
+
+  /** Public origin of the web app, used to build invite links in emails.
+   *  Defaults to localhost for dev. */
+  @IsString()
+  @IsOptional()
+  PUBLIC_WEB_URL?: string;
+
   @IsOptional()
   @IsIn(['trace', 'debug', 'info', 'warn', 'error'])
   LOG_LEVEL = 'info';
