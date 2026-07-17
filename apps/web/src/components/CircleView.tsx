@@ -1,25 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
-import { keccak256, encodePacked, pad, toHex } from 'viem';
+import { usePrivy } from '@privy-io/react-auth';
 import { circleAbi } from '@/lib/contracts';
-import { publicClient, getWalletClient } from '@/lib/wallet';
+import { publicClient } from '@/lib/wallet';
+import { useMember } from '@/lib/member';
+import { computeCommitment, secretToSalt, checkRevealWillSucceed } from '@/lib/commitment';
 import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
 import { PhaseBadge } from './PhaseBadge';
 
 const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
 type StateName = typeof STATE_NAMES[number];
-
-/**
- * The salt the contract hashes is a bytes32. We derive it deterministically from
- * the user's secret number so they only need to remember the number: the same
- * secret always yields the same salt for commit AND reveal.
- */
-function secretToSalt(secret: string): `0x${string}` {
-  return pad(toHex(BigInt(secret)), { size: 32 });
-}
 
 function truncate(addr: string) {
   return addr.slice(0, 6) + '...' + addr.slice(-4);
@@ -31,9 +23,9 @@ interface CircleViewProps {
 
 export function CircleView({ circleAddress }: CircleViewProps) {
   const { authenticated, login } = usePrivy();
-  const { wallets } = useWallets();
-  const embeddedWallet = wallets.find(w => w.walletClientType === 'privy');
-  const userAddress = embeddedWallet?.address as `0x${string}` | undefined;
+  // Single source of truth for the member's on-chain identity + how their txs
+  // are sent. Never read a wallet address any other way here — see lib/member.ts.
+  const { address: userAddress, gasless, write } = useMember();
 
   const [state, setState] = useState<number | null>(null);
   const [seats, setSeats] = useState<number>(0);
@@ -117,9 +109,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
     setTxPending(true);
     setTxError(null);
     try {
-      const wc = await getWalletClient(embeddedWallet, userAddress!);
-      const hash = await wc.writeContract({ address: circleAddress, abi: circleAbi as any, functionName, args });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
       await load();
     } catch (e: any) {
       setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
@@ -133,10 +123,34 @@ export function CircleView({ circleAddress }: CircleViewProps) {
     setTxPending(true);
     setTxError(null);
     try {
-      await ensureStableAllowance(embeddedWallet, userAddress!, circleAddress, needed);
-      const wc = await getWalletClient(embeddedWallet, userAddress!);
-      const hash = await wc.writeContract({ address: circleAddress, abi: circleAbi as any, functionName, args });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await ensureStableAllowance(write, userAddress!, circleAddress, needed);
+      await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      await load();
+    } catch (e: any) {
+      setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
+    } finally {
+      setTxPending(false);
+    }
+  }
+
+  /**
+   * Reveal, but only after locally re-running the contract's own commitment
+   * check. A failed reveal isn't just a wasted tx — the member then looks like a
+   * no-show and can be slashed, so we refuse to send one we know will revert.
+   */
+  async function doReveal() {
+    if (!userAddress || !secret) return;
+    setTxPending(true);
+    setTxError(null);
+    try {
+      const problem = await checkRevealWillSucceed(circleAddress, userAddress, contribution, secret);
+      if (problem) { setTxError(problem); return; }
+      await write({
+        address: circleAddress,
+        abi: circleAbi as any,
+        functionName: 'reveal',
+        args: [contribution, secretToSalt(secret)],
+      });
       await load();
     } catch (e: any) {
       setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
@@ -149,7 +163,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
     setTxPending(true);
     setTxError(null);
     try {
-      await claimFaucet(embeddedWallet, userAddress!);
+      await claimFaucet(write, userAddress!);
       await load();
     } catch (e: any) {
       setTxError(e?.shortMessage ?? e?.message ?? 'Faucet failed');
@@ -166,9 +180,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
   function computeHash() {
     if (!userAddress || !secret) return;
     try {
-      const salt = secretToSalt(secret);
-      const hash = keccak256(encodePacked(['uint256', 'bytes32', 'address'], [contribution, salt, userAddress]));
-      setComputedHash(hash);
+      setComputedHash(computeCommitment(contribution, secret, userAddress));
     } catch {
       setTxError('Invalid secret — must be a whole number');
     }
@@ -355,7 +367,7 @@ export function CircleView({ circleAddress }: CircleViewProps) {
                 />
               </div>
               <button
-                onClick={() => secret && doWrite('reveal', [contribution, secretToSalt(secret)])}
+                onClick={doReveal}
                 disabled={txPending || !secret}
                 className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-semibold px-6 py-2.5 rounded-lg transition"
               >

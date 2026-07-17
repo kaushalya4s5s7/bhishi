@@ -1,20 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { addresses, mockStableAbi } from './contracts';
-import { publicClient, getWalletClient } from './wallet';
+import type { MemberWrite } from './erc20';
 
 /**
  * Claim 500 mUSDC from the MockStable faucet (1-day per-address cooldown).
- * Waits for the tx to confirm. Throws with a friendly message on cooldown.
+ * Sent via the member's own identity (see lib/member.ts) so the funds land on
+ * the same address that will join/commit. Throws a friendly cooldown message.
  */
-export async function claimFaucet(embeddedWallet: any, userAddress: `0x${string}`) {
-  const wc = await getWalletClient(embeddedWallet, userAddress);
+export async function claimFaucet(write: MemberWrite, _userAddress: `0x${string}`) {
   try {
-    const hash = await wc.writeContract({
+    await write({
       address: addresses.monadTestnet.mockStable,
       abi: mockStableAbi as any,
       functionName: 'faucet',
     });
-    await publicClient.waitForTransactionReceipt({ hash });
   } catch (e: any) {
     const msg = e?.shortMessage ?? e?.message ?? '';
     if (/FaucetCooldown/i.test(msg)) {

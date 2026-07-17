@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { useState } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
+import { useMember } from '@/lib/member';
 
 function truncate(addr: string) {
   return addr.slice(0, 6) + '...' + addr.slice(-4);
@@ -15,10 +16,10 @@ const LINKS = [
 
 export function Navbar() {
   const { ready, authenticated, login, logout } = usePrivy();
-  const { wallets } = useWallets();
   const [open, setOpen] = useState(false);
-  const embeddedWallet = wallets.find(w => w.walletClientType === 'privy');
-  const address = embeddedWallet?.address;
+  // Show the identity that actually holds funds and joins circles — not the
+  // embedded signer behind it (see lib/member.ts).
+  const { address } = useMember();
 
   return (
     <nav className="sticky top-0 z-[100] w-full bg-[#faf9f6] border-b border-black/10 isolate">

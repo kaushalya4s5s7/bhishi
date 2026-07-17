@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 import { useEffect, useState } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
 import { formatEther, parseEventLogs } from 'viem';
 import { addresses, circleFactoryAbi } from '@/lib/contracts';
-import { publicClient, getWalletClient } from '@/lib/wallet';
+import { publicClient } from '@/lib/wallet';
+import { useMember } from '@/lib/member';
 
 interface CreateWizardProps {
   onSuccess?: (addr: string) => void;
@@ -17,9 +18,10 @@ type Mode = 0 | 1; // 0 = LUCKY_DRAW, 1 = AUCTION
 
 export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
   const { authenticated, login } = usePrivy();
-  const { wallets } = useWallets();
-  const embeddedWallet = wallets.find(w => w.walletClientType === 'privy');
-  const userAddress = embeddedWallet?.address as `0x${string}` | undefined;
+  // The creator identity matters beyond signing: the circle refunds leftover VRF
+  // funding to createCircle's caller, so this must be the address the user
+  // actually controls funds with (see lib/member.ts).
+  const { address: userAddress, write } = useMember();
 
   const [seats, setSeats] = useState(4);
   const [contribution, setContribution] = useState(100);
@@ -68,8 +70,7 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
         args: [BigInt(seats)],
       })) as bigint;
 
-      const wc = await getWalletClient(embeddedWallet, userAddress);
-      const hash = await wc.writeContract({
+      const hash = await write({
         address: addresses.monadTestnet.factory,
         abi: circleFactoryAbi as any,
         functionName: 'createCircle',

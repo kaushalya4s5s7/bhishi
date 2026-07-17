@@ -1,5 +1,6 @@
 'use client';
 import { PrivyProvider } from '@privy-io/react-auth';
+import { SmartWalletsProvider } from '@privy-io/react-auth/smart-wallets';
 import { privyAppId, privyConfig } from '@/lib/privy';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -19,9 +20,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
       </>
     );
   }
+  // SmartWalletsProvider is always mounted, but it only does anything once
+  // smart wallets are enabled in the Privy Dashboard (with a paymaster URL
+  // registered there for gas sponsorship). Until then users keep their embedded
+  // EOA and pay their own gas — see useMember(), which picks exactly one
+  // identity either way.
   return (
     <PrivyProvider appId={privyAppId} config={privyConfigAny}>
-      {children}
+      <SmartWalletsProvider>{children}</SmartWalletsProvider>
     </PrivyProvider>
   );
 }

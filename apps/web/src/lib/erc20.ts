@@ -1,7 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { maxUint256 } from 'viem';
 import { addresses, mockStableAbi } from './contracts';
-import { publicClient, getWalletClient } from './wallet';
+import { publicClient } from './wallet';
+
+/** Sends a contract write as the member — supplied by useMember() so approvals
+ *  go out from the SAME identity that will join/commit (see lib/member.ts). */
+export type MemberWrite = (a: {
+  address: `0x${string}`; abi: any; functionName: string; args?: any[]; value?: bigint;
+}) => Promise<`0x${string}`>;
 
 const STABLE = addresses.monadTestnet.mockStable;
 
@@ -26,7 +32,7 @@ export async function stableAllowance(owner: `0x${string}`, spender: `0x${string
  * actual contract write. Throws if the user's balance can't cover `needed`.
  */
 export async function ensureStableAllowance(
-  embeddedWallet: any,
+  write: MemberWrite,
   userAddress: `0x${string}`,
   spender: `0x${string}`,
   needed: bigint,
@@ -40,9 +46,5 @@ export async function ensureStableAllowance(
   const current = await stableAllowance(userAddress, spender);
   if (current >= needed) return;
 
-  const wc = await getWalletClient(embeddedWallet, userAddress);
-  const hash = await wc.writeContract({
-    address: STABLE, abi: mockStableAbi as any, functionName: 'approve', args: [spender, maxUint256],
-  });
-  await publicClient.waitForTransactionReceipt({ hash });
+  await write({ address: STABLE, abi: mockStableAbi as any, functionName: 'approve', args: [spender, maxUint256] });
 }

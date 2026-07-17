@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
 import { createPublicClient, http } from 'viem';
 import { monadTestnetChain } from '@/lib/privy';
 import { addresses, circleAbi } from '@/lib/contracts';
+import { useMember } from '@/lib/member';
 import { CircleCard } from '@/components/CircleCard';
 import { CreateWizard } from '@/components/CreateWizard';
 import { useRouter } from 'next/navigation';
@@ -13,9 +14,9 @@ const publicClient = createPublicClient({ chain: monadTestnetChain, transport: h
 
 export default function DashboardPage() {
   const { ready, authenticated, login } = usePrivy();
-  const { wallets } = useWallets();
-  const embeddedWallet = wallets.find(w => w.walletClientType === 'privy');
-  const userAddress = embeddedWallet?.address as `0x${string}` | undefined;
+  // Must be the SAME identity that joins/commits, or "my circles" would filter
+  // on an address that never joined and the user's circles would vanish.
+  const { address: userAddress } = useMember();
   const router = useRouter();
 
   const [circles, setCircles] = useState<`0x${string}`[]>([]);

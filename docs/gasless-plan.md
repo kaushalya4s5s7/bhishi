@@ -64,17 +64,46 @@ must switch to the smart-account address **consistently**, or commitments won't
 verify and members won't match. This is the single highest-risk part of the
 change and must be checked end-to-end on testnet.
 
-## Scope / order
+## Status: code is DONE — it needs your dashboard keys to switch on
 
-1. Privy Dashboard: enable smart wallets; Pimlico: get Monad Testnet URLs; register
-   paymaster in Privy. *(no code)*
-2. `apps/web`: add smart-wallet provider; route member address + writes through
-   the smart account (`lib/wallet.ts` is the single seam).
-3. Verify on testnet: a wallet with **zero MON** completes join → commit →
-   reveal → claim.
-4. Fund + monitor the paymaster; consider limits (a sponsored endpoint is
-   abusable — Pimlico supports sponsorship policies; scope them to Bhishi's
-   contract addresses).
+The app code is written and builds clean. It works **today** with plain EOAs
+(members pay their own gas) and flips to fully-sponsored the moment you enable
+smart wallets in the Privy Dashboard — **no code change required**.
+
+### What was built
+
+- **`lib/member.ts` — `useMember()`, the single source of truth.** Returns one
+  `address` and one `write()`. If a smart account exists it is preferred (and
+  `gasless` is true); otherwise it falls back to the embedded EOA. Nothing else
+  in the app may pick a wallet — this is what prevents the two-address bug.
+  Verified: `grep` finds no wallet selection anywhere outside this file.
+- **`lib/commitment.ts` — the pre-reveal guard.** Before sending a reveal, it
+  re-runs the contract's own check locally (`commitmentOf` vs the recomputed
+  hash) and refuses with a plain-English reason instead of firing a tx that
+  reverts and gets the member **slashed**.
+- **`providers.tsx`** mounts `SmartWalletsProvider` unconditionally (inert until
+  enabled in the Dashboard).
+- All member paths — join, commit, reveal, claim, approve, faucet, createCircle
+  — now route through `useMember().write()`, so the identity is consistent.
+- `permissionless` added: Privy's smart-wallets module needs it as a peer dep.
+
+### To switch it on (your steps, no code)
+
+1. **Privy Dashboard** → enable smart wallets → pick an account type (Safe/Kernel
+   are the common choices) → add **Monad Testnet**.
+2. **Pimlico** → create an account → API Keys → copy the **Monad Testnet**
+   bundler + paymaster URLs.
+3. **Privy Dashboard** → register that **paymaster URL** so Privy routes
+   UserOperations through it.
+4. **Fund the Pimlico paymaster** with MON.
+5. Verify: sign in as a fresh user, confirm the Navbar shows the **smart account**
+   address, and complete join → commit → reveal → claim with **zero MON**.
+
+## Remaining verification (needs the keys above)
+
+A wallet with **zero MON** must complete join → commit → reveal → claim. That is
+the one test that proves the whole thing — it cannot be run until smart wallets
+and the paymaster are live.
 
 ## Open risks
 
