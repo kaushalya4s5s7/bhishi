@@ -71,7 +71,7 @@ contract AuctionLifecycle is Script {
 
     function _createAndJoin() internal {
         vm.broadcast(deployerKey);
-        circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
+        circle = Circle(payable(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION)));
         console.log("Circle (AUCTION) created at:", address(circle));
 
         for (uint256 i = 0; i < 3; i++) {
@@ -109,12 +109,18 @@ contract AuctionLifecycle is Script {
             circle.reveal(bids[i], salt);
         }
 
-        // DRAW. The deployer must be the circle's configured vrfOperator (Gelato's
-        // dedicated msg.sender in production) for this fulfilment to be accepted.
+        // DRAW. This demo runs against a factory with entropy unset (permissionless
+        // mode), so requestDraw() makes no Pyth request and the deployer delivers
+        // the callback directly. In production Pyth's keeper calls _entropyCallback
+        // and the circle sponsors the fee from its own MON balance.
         vm.broadcast(deployerKey);
         circle.requestDraw();
         vm.broadcast(deployerKey);
-        circle.fulfillRandomness(uint256(keccak256(abi.encodePacked("rand", round))), _vrfPayload(round));
+        circle._entropyCallback(
+            circle.vrfSequenceNumber(),
+            deployer,
+            keccak256(abi.encodePacked("rand", round))
+        );
     }
 
     function _report(uint256 round) internal view {
@@ -140,16 +146,4 @@ contract AuctionLifecycle is Script {
         console.log("  [OK] conservation holds");
     }
 
-    /// @notice Rebuild the exact `dataWithRound` payload Gelato echoes back to
-    ///         the consumer: abi.encode(round, abi.encode(requestId, extraData)).
-    ///         Mirrors GelatoVRFConsumerBase's private _round(). The consumer
-    ///         SILENTLY ignores a fulfilment whose hash does not match the one it
-    ///         stored at request time, so the round used here must be the round of
-    ///         the block in which requestDraw() ran.
-    function _vrfPayload(uint256 requestId) internal view returns (bytes memory) {
-        uint256 elapsedFromGenesis = block.timestamp - 1692803367;
-        uint256 currentRound = (elapsedFromGenesis / 3) + 1;
-        uint256 round_ = block.chainid == 1 ? currentRound + 4 : currentRound + 1;
-        return abi.encode(round_, abi.encode(requestId, bytes("")));
-    }
 }

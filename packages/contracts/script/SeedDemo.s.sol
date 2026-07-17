@@ -32,7 +32,7 @@ contract SeedDemo is Script {
         // Fund + approve for deployer (joins as seat 0)
         MockStable(stable).faucet();
         MockStable(stable).approve(circleAddr, BOND);
-        Circle(circleAddr).join();
+        Circle(payable(circleAddr)).join();
         console.log("Deployer joined as seat 0");
 
         console.log("\nNext steps:");

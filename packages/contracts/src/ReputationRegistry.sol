@@ -34,7 +34,7 @@ contract ReputationRegistry is IReputationRegistry {
         // Gate 1: caller must be a circle registered by the factory
         if (!ICircleFactory(factory).isCircle(msg.sender)) revert NotFactoryCircle();
         // Gate 2: the calling circle must be in COMPLETED state
-        if (Circle(msg.sender).state() != Circle.State.COMPLETED) revert NotFactoryCircle();
+        if (Circle(payable(msg.sender)).state() != Circle.State.COMPLETED) revert NotFactoryCircle();
         // Gate 3: each (circle, member) pair may only attest once
         if (hasAttested[msg.sender][member]) revert AlreadyAttested();
         hasAttested[msg.sender][member] = true;

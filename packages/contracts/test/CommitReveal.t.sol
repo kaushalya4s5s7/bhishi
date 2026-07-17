@@ -21,7 +21,7 @@ contract CommitRevealTest is Test {
         stable = new MockStable();
         address impl = address(new Circle());
         factory = new CircleFactory(impl, address(stable), address(0), address(0));
-        circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        circle = Circle(payable(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         for (uint160 i = 0; i < SEATS; i++) {
             address m = address(uint160(0x1000 + i));

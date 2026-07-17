@@ -21,7 +21,7 @@ contract SlashingTest is Test {
         stable = new MockStable();
         address impl = address(new Circle());
         CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(0));
-        circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        circle = Circle(payable(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         for (uint160 i = 0; i < SEATS; i++) {
             address m = address(uint160(0x2000 + i));
@@ -91,7 +91,7 @@ contract SlashingTest is Test {
         address impl2 = address(new Circle());
         CircleFactory factory2 = new CircleFactory(impl2, address(stab2), address(0), address(0));
         uint256 dustBond = 301e6 + 1;
-        Circle c2 = Circle(factory2.createCircle(CONTRIB, SEATS, dustBond, Mode.LUCKY_DRAW));
+        Circle c2 = Circle(payable(factory2.createCircle(CONTRIB, SEATS, dustBond, Mode.LUCKY_DRAW)));
 
         address[] memory members2 = new address[](SEATS);
         for (uint160 i = 0; i < SEATS; i++) {

@@ -6,7 +6,8 @@ import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {MockStable} from "../src/MockStable.sol";
-import {MockVRF} from "./mocks/MockVRF.sol";
+import {MockEntropy} from "./mocks/MockEntropy.sol";
+import {VrfFixture} from "./mocks/VrfFixture.sol";
 
 /// @notice Handler that drives Circle state transitions for invariant testing.
 ///         The invariant: circle.balanceOf == totalClaimable + dustAccrued + undrawnPools
@@ -32,7 +33,7 @@ import {MockVRF} from "./mocks/MockVRF.sol";
 ///            bid/cap/tie/dividend money-path was never exercised at all. The
 ///            guided driver makes those paths reachable while the fuzzer still
 ///            controls the bids (via `bidSeed`) and the draw randomness.
-contract CircleHandler is Test {
+contract CircleHandler is Test, VrfFixture {
     Circle      public circle;
     MockStable  public stable;
 
@@ -61,9 +62,9 @@ contract CircleHandler is Test {
     uint256 public capRevertCount;
     uint256 public roundsDriven;
 
-    MockVRF internal vrf;
+    MockEntropy internal vrf;
 
-    constructor(Circle _circle, MockStable _stable, MockVRF _vrf) {
+    constructor(Circle _circle, MockStable _stable, MockEntropy _vrf) {
         vrf = _vrf;
         circle = _circle;
         stable = _stable;
@@ -225,7 +226,7 @@ contract CircleHandler is Test {
         if (_state() == uint256(Circle.State.DRAW)) {
             try circle.requestDraw() {} catch {}
             if (circle.drawRequestedAt() != 0) {
-                try vrf.fulfill(address(circle), circle.currentRound(), uint256(keccak256(abi.encodePacked(bidSeed, callCount)))) {
+                try vrf.fulfillLatest(address(circle), uint256(keccak256(abi.encodePacked(bidSeed, callCount)))) {
                     roundsDriven++;
                 } catch {}
             }
@@ -316,7 +317,7 @@ contract CircleHandler is Test {
     function fulfillRandomness(uint256 rand) external {
         if (_state() != uint256(Circle.State.DRAW)) return;
         if (circle.drawRequestedAt() == 0) return;
-        try vrf.fulfill(address(circle), circle.currentRound(), rand) {} catch {}
+        try vrf.fulfillLatest(address(circle), rand) {} catch {}
     }
 
     function reclaimOnStall() external {
@@ -344,10 +345,10 @@ contract CircleHandler is Test {
 /// @notice Invariant suite: conservation of value inside Circle.
 ///         LEAK 3 proof: every token that enters the circle is accounted for
 ///         in totalClaimable + dustAccrued + undrawnPools.
-contract ConservationInvTest is StdInvariant, Test {
+contract ConservationInvTest is StdInvariant, Test, VrfFixture {
     Circle          internal circle;
     MockStable      internal stable;
-    MockVRF         internal vrf;
+    MockEntropy         internal vrf;
     CircleHandler   internal handler;
 
     uint256 constant CONTRIB = 100e6;
@@ -356,10 +357,10 @@ contract ConservationInvTest is StdInvariant, Test {
 
     function setUp() public {
         stable      = new MockStable();
-        vrf         = new MockVRF();
+        vrf         = new MockEntropy(VRF_FEE);
         address impl = address(new Circle());
         CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
-        circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         handler = new CircleHandler(circle, stable, vrf);
 
@@ -386,10 +387,10 @@ contract ConservationInvTest is StdInvariant, Test {
 ///         handler to an AUCTION-mode circle so the fuzzer exercises the
 ///         dividend-distribution money path (bids, ties, VRF fallback, cap
 ///         edges) under the same conservation invariant.
-contract ConservationInvAuctionTest is StdInvariant, Test {
+contract ConservationInvAuctionTest is StdInvariant, Test, VrfFixture {
     Circle          internal circle;
     MockStable      internal stable;
-    MockVRF         internal vrf;
+    MockEntropy         internal vrf;
     CircleHandler   internal handler;
 
     uint256 constant CONTRIB = 100e6;
@@ -419,10 +420,10 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
 
     function setUp() public {
         stable      = new MockStable();
-        vrf         = new MockVRF();
+        vrf         = new MockEntropy(VRF_FEE);
         address impl = address(new Circle());
         CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
-        circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
+        circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.AUCTION)));
 
         handler = new CircleHandler(circle, stable, vrf);
 

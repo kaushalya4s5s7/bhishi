@@ -5,14 +5,15 @@ import {Test} from "forge-std/Test.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {Circle, Mode} from "../src/Circle.sol";
 import {MockStable} from "../src/MockStable.sol";
-import {MockVRF} from "./mocks/MockVRF.sol";
+import {MockEntropy} from "./mocks/MockEntropy.sol";
+import {VrfFixture} from "./mocks/VrfFixture.sol";
 
 /// @notice Money Shot 4 / LEAK 1 — VRF silence → permissionless reclaim.
-contract ReclaimOnStallTest is Test {
+contract ReclaimOnStallTest is Test, VrfFixture {
     CircleFactory internal factory;
     MockStable internal stable;
     Circle internal circle;
-    MockVRF internal vrf;
+    MockEntropy internal vrf;
 
     uint256 internal constant CONTRIB = 100e6;
     uint256 internal constant SEATS   = 3;
@@ -22,10 +23,10 @@ contract ReclaimOnStallTest is Test {
 
     function setUp() public {
         stable = new MockStable();
-        vrf    = new MockVRF();
+        vrf    = new MockEntropy(VRF_FEE);
         address impl = address(new Circle());
         factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
-        circle  = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        circle  = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         for (uint160 i = 0; i < SEATS; i++) {
             address m = address(uint160(0x3000 + i));

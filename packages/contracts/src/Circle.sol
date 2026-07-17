@@ -4,7 +4,8 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {GelatoVRFConsumerBase} from "./vendor/gelato/GelatoVRFConsumerBase.sol";
+import {IEntropyConsumer} from "./vendor/pyth/IEntropyConsumer.sol";
+import {IEntropyV2} from "./vendor/pyth/IEntropyV2.sol";
 import {IReputationRegistry} from "./interfaces/IReputationRegistry.sol";
 
 /// @notice Distribution mechanism for a circle's pot each round.
@@ -18,7 +19,7 @@ enum Mode {
 ///         cloned per-circle by CircleFactory.
 ///         M3: FILLING → ACTIVE join flow + FILLING_TIMEOUT refund (LEAK 6).
 ///         M4: commit-reveal rounds + auto-slash with dust bucket (LEAK 3, money shot 3).
-contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
+contract Circle is ReentrancyGuard, IEntropyConsumer {
     using SafeERC20 for IERC20;
 
     // ─── errors ────────────────────────────────────────────────────────────────
@@ -38,11 +39,11 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
     error NothingToClaim();
     error CommitPhaseNotComplete();
     error NotDrawPhase();
-    error NotVrfOperator();
     error DrawNotRequested();
     error VrfTimeoutNotElapsed();
     error DrawAlreadyRequested();
     error BidExceedsCap();
+    error InsufficientVrfFunding();
 
     // ─── state enum ────────────────────────────────────────────────────────────
     /// @notice Full lifecycle state machine.
@@ -83,8 +84,16 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
     address public factory;
     address public reputation;
 
-    // ─── VRF ──────────────────────────────────────────────────────────────────
-    address public vrfOperator;       // only this address can call fulfillRandomness
+    // ─── VRF (Pyth Entropy) ───────────────────────────────────────────────────
+    /// @notice Pyth Entropy contract. address(0) = permissionless/test mode:
+    ///         requestDraw() skips the Entropy call entirely and the draw is
+    ///         driven by a direct callback (local tests + demo scripts).
+    address public entropyContract;
+    /// @notice The circle's creator — leftover VRF funding is refunded here.
+    address public creator;
+    /// @notice Sequence number of the in-flight Entropy request; the callback
+    ///         must match it or it is ignored.
+    uint64  public vrfSequenceNumber;
     uint256 public drawRequestedAt;   // timestamp of requestDraw() call; 0 = not pending
     mapping(address => bool) public hasWon; // true once member received their payout round
 
@@ -109,7 +118,7 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
     // ─── auction-mode bid tracking (reset each round) ──────────────────────────
     // Deliberately just the raw revealed bids — no incremental "highest so far"
     // tracker. The winner/tie set is recomputed by scanning bidDiscount[] at
-    // draw time (fulfillRandomness, a later task), so there is exactly one place
+    // draw time (entropyCallback), so there is exactly one place
     // that decides who's winning, not two trackers that could drift out of sync.
     mapping(address => uint256) public bidDiscount; // revealed bid, meaningful only in AUCTION mode
 
@@ -129,6 +138,8 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
     event DrawRequested(uint256 indexed round, uint256 requestedAt);
     event WinnerDrawn(uint256 indexed round, address indexed winner, uint256 randomness);
     event Stalled(uint256 indexed round);
+    event VrfFunded(address from, uint256 amount);
+    event VrfRefunded(address to, uint256 amount, bool ok);
 
     // ─── constructor ───────────────────────────────────────────────────────────
     /// @dev Lock the implementation so only clones can ever be initialized.
@@ -145,7 +156,8 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
         address _stable,
         address _factory,
         address _reputation,
-        address _vrfOperator
+        address _entropy,
+        address _creator
     ) external {
         if (initialized) revert AlreadyInitialized();
         if (_seats < 2 || _seats > MAX_SEATS) revert InvalidSeats();
@@ -157,8 +169,9 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
         mode         = _mode;
         stable       = _stable;
         factory      = _factory;
-        reputation   = _reputation;
-        vrfOperator  = _vrfOperator;
+        reputation      = _reputation;
+        entropyContract = _entropy;
+        creator         = _creator;
 
         state     = State.FILLING;
         startedAt = block.timestamp;
@@ -374,39 +387,61 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
     /// @notice Permissionless: signal that a VRF draw is needed for the current
     ///         round. Records the timestamp so reclaimOnStall can fire if VRF
     ///         goes silent.
+    ///         The circle SPONSORS the Entropy fee out of its own MON balance,
+    ///         so the (permissionless) caller never pays for randomness.
     function requestDraw() external {
         if (state != State.DRAW) revert NotDrawPhase();
         if (drawRequestedAt != 0) revert DrawAlreadyRequested();
         drawRequestedAt = block.timestamp;
 
-        // THIS is the Gelato VRF request: _requestRandomness emits
-        // RequestedRandomness(round, data), which Gelato's nodes watch for and
-        // answer by calling fulfillRandomness with drand randomness. There is no
-        // off-chain API to call — the event is the request.
-        _requestRandomness("");
+        // entropyContract == 0 → permissionless/test mode: no Pyth request is
+        // made; the draw is delivered by a direct _entropyCallback (local tests
+        // and demo scripts). Guards above still gate the phase.
+        if (entropyContract != address(0)) {
+            uint256 fee = IEntropyV2(entropyContract).getFeeV2();
+            if (address(this).balance < fee) revert InsufficientVrfFunding();
+            vrfSequenceNumber = IEntropyV2(entropyContract).requestV2{value: fee}();
+        }
 
         emit DrawRequested(currentRound, drawRequestedAt);
     }
 
-    /// @notice Gelato's dedicated msg.sender for this VRF task — the only
-    ///         address the base contract accepts fulfilments from.
-    function _operator() internal view override returns (address) {
-        return vrfOperator;
+    /// @notice Accept MON to sponsor Entropy fees. Anyone may top a circle up.
+    receive() external payable {
+        emit VrfFunded(msg.sender, msg.value);
     }
 
-    // ─── _fulfillRandomness (Gelato VRF callback) ──────────────────────────────
-    /// @notice Invoked by GelatoVRFConsumerBase.fulfillRandomness after it has
-    ///         checked msg.sender == _operator(), matched the request hash, and
-    ///         domain-separated the drand randomness with this address/chainid/
-    ///         requestId. Picks a winner from eligible (joined && !hasWon)
-    ///         members, credits the pot, and advances state.
-    function _fulfillRandomness(uint256 randomness, uint256 /*requestId*/, bytes memory /*extraData*/)
+    /// @notice Quote the current Entropy fee for one draw (0 in test mode).
+    function vrfFeeEstimate() external view returns (uint256) {
+        if (entropyContract == address(0)) return 0;
+        return IEntropyV2(entropyContract).getFeeV2();
+    }
+
+    /// @inheritdoc IEntropyConsumer
+    function getEntropy() internal view override returns (address) {
+        return entropyContract;
+    }
+
+    // ─── entropyCallback (Pyth Entropy callback) ───────────────────────────────
+    /// @notice Invoked via IEntropyConsumer._entropyCallback, which has already
+    ///         enforced msg.sender == getEntropy(). Picks a winner from eligible
+    ///         (joined && !hasWon) members, credits the pot, and advances state.
+    ///
+    ///         MUST NEVER REVERT: per Pyth's docs a reverting callback cannot be
+    ///         re-delivered by the keeper, which would strand the draw forever
+    ///         (the fee is already spent and the sequence number is consumed).
+    ///         Every precondition below is therefore a silent `return`, not a
+    ///         revert. If it no-ops, reclaimOnStall() is still the safety valve.
+    ///         nonReentrant is deliberately NOT applied here — see report.
+    function entropyCallback(uint64 sequenceNumber, address /*provider*/, bytes32 randomNumber)
         internal
         override
-        nonReentrant
     {
-        if (state != State.DRAW) revert NotDrawPhase();
-        if (drawRequestedAt == 0) revert DrawNotRequested();
+        if (state != State.DRAW) return;
+        if (drawRequestedAt == 0) return;
+        if (sequenceNumber != vrfSequenceNumber) return;
+
+        uint256 randomness = uint256(randomNumber);
 
         // Build eligible list: joined && !hasWon
         uint256 n = members.length;
@@ -426,6 +461,7 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
         // to recover it. This is a known edge case flagged for the M6 security-auditor gate.
         if (eligibleCount == 0) {
             state = State.STALLED;
+            _refundVrf();
             emit Stalled(currentRound);
             return;
         }
@@ -561,6 +597,9 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
             drawRequestedAt = 0;
             state = State.COMPLETED;
 
+            // Circle is over — return unspent VRF sponsorship to the creator.
+            _refundVrf();
+
             // M6: attest all joined members in the reputation registry
             if (reputation != address(0)) {
                 for (uint256 i = 0; i < n; i++) {
@@ -641,10 +680,24 @@ contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
         // If no joined member (degenerate), re-park dust
         if (!dustAssigned) dustAccrued = dust;
 
+        _refundVrf();
+
         emit Stalled(currentRound);
     }
 
     // ─── internal helpers ──────────────────────────────────────────────────────
+
+    /// @notice Return any leftover VRF sponsorship MON to the creator.
+    /// @dev    A failed refund (creator is a contract that rejects MON, or is
+    ///         unset) must NEVER trap the ROSCA: the send result is recorded in
+    ///         the event but never reverts the terminal transition. The stable
+    ///         (ERC20) money path is entirely independent of this native balance.
+    function _refundVrf() internal {
+        uint256 amount = address(this).balance;
+        if (amount == 0 || creator == address(0)) return;
+        (bool ok, ) = creator.call{value: amount}("");
+        emit VrfRefunded(creator, amount, ok);
+    }
 
     function _activeCount() internal view returns (uint256 count) {
         for (uint256 i = 0; i < members.length; i++) {

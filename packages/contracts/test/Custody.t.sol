@@ -20,7 +20,7 @@ contract CustodyTest is Test {
         factory = new CircleFactory(impl, address(stable), address(0), address(0));
         // organizer creates circle
         vm.prank(organizer);
-        circle = Circle(factory.createCircle(100e6, 2, 300e6, Mode.LUCKY_DRAW));
+        circle = Circle(payable(factory.createCircle(100e6, 2, 300e6, Mode.LUCKY_DRAW)));
     }
 
     /// Circle has no withdraw function — organizer cannot pull funds.

@@ -5,15 +5,16 @@ import {Test} from "forge-std/Test.sol";
 import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {MockStable} from "../src/MockStable.sol";
-import {MockVRF} from "./mocks/MockVRF.sol";
+import {MockEntropy} from "./mocks/MockEntropy.sol";
+import {VrfFixture} from "./mocks/VrfFixture.sol";
 
 /// @notice LEAK 2: prove that winning the pot and then defaulting (missing reveal)
 ///         is never profitable for the defaulter. The bond gate in CircleFactory
 ///         (bond >= (seats-1)*contribution) ensures slashing covers the shortfall.
-contract WinnerDefaultTest is Test {
+contract WinnerDefaultTest is Test, VrfFixture {
     MockStable    internal stable;
     CircleFactory internal factory;
-    MockVRF internal vrf;
+    MockEntropy internal vrf;
 
     uint256 internal constant CONTRIB = 100e6;
     uint256 internal constant SEATS   = 3;
@@ -29,7 +30,7 @@ contract WinnerDefaultTest is Test {
 
     function setUp() public {
         stable  = new MockStable();
-        vrf     = new MockVRF();
+        vrf     = new MockEntropy(VRF_FEE);
         address impl = address(new Circle());
         factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
     }
@@ -57,7 +58,7 @@ contract WinnerDefaultTest is Test {
         vm.assume(defaultRound < SEATS);
         vm.assume(winRound < defaultRound); // ensures alice wins THEN defaults
 
-        Circle circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        Circle circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         address alice = address(0xA11CE);
         address bob   = address(0xB0B);
@@ -157,7 +158,7 @@ contract WinnerDefaultTest is Test {
             //   - In winRound, use randomness=0 so alice (index 0 in eligible list) wins
             //   - Otherwise use randomness=1 (bob or carol wins)
             uint256 rand = (r == uint256(winRound)) ? 0 : 1;
-            vrf.fulfill(address(circle), nextRequestId++, rand);
+            vrf.fulfillLatest(address(circle), rand);
 
             if (uint256(circle.state()) == uint256(Circle.State.COMPLETED) ||
                 uint256(circle.state()) == uint256(Circle.State.STALLED)) break;

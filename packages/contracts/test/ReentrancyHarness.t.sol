@@ -5,17 +5,18 @@ import {Test} from "forge-std/Test.sol";
 import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReentrantToken} from "./mocks/ReentrantToken.sol";
-import {MockVRF} from "./mocks/MockVRF.sol";
+import {MockEntropy} from "./mocks/MockEntropy.sol";
+import {VrfFixture} from "./mocks/VrfFixture.sol";
 
 /// @notice Proves that Circle.claim() is safe against reentrancy attacks.
 ///         CEI (Checks-Effects-Interactions) zeros the claimable balance before
 ///         the ERC20 transfer, so a malicious token that calls back into claim()
 ///         during transfer hits NothingToClaim on the nested call.
 ///         The nonReentrant modifier provides a belt-and-suspenders guard.
-contract ReentrancyHarnessTest is Test {
+contract ReentrancyHarnessTest is Test, VrfFixture {
     ReentrantToken internal token;
     CircleFactory  internal factory;
-    MockVRF        internal vrf;
+    MockEntropy        internal vrf;
     Circle         internal circle;
 
     uint256 internal constant CONTRIB = 100e6;
@@ -29,10 +30,10 @@ contract ReentrancyHarnessTest is Test {
 
     function setUp() public {
         token  = new ReentrantToken();  // mints 1_000_000e6 to this contract
-        vrf    = new MockVRF();
+        vrf    = new MockEntropy(VRF_FEE);
         address impl = address(new Circle());
         factory = new CircleFactory(impl, address(token), address(0), address(vrf));
-        circle  = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        circle  = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         // Wire up the attack target
         token.setTarget(address(circle));
@@ -88,7 +89,7 @@ contract ReentrancyHarnessTest is Test {
 
         // Draw
         circle.requestDraw();
-        vrf.fulfill(address(circle), nextRequestId++, rand);
+        vrf.fulfillLatest(address(circle), rand);
     }
 
     /// @notice Core reentrancy test:

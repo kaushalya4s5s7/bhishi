@@ -43,24 +43,35 @@ contract CircleFactoryTest is Test {
         assertTrue(a != b);
     }
 
-    // ─── VRF operator wiring (B0) ─────────────────────────────────────────────
+    // ─── Entropy wiring (B0) ──────────────────────────────────────────────────
 
-    /// @notice The factory's configured vrfOperator must be threaded into every
-    ///         circle it creates — not hardcoded to address(0) (which would leave
-    ///         fulfillRandomness permissionless, i.e. anyone could pick winners).
-    function test_factoryThreadsVrfOperatorIntoCircles() public {
+    /// @notice The factory's configured entropy contract must be threaded into
+    ///         every circle it creates — not hardcoded to address(0) (which would
+    ///         leave the draw callback permissionless, i.e. anyone could pick
+    ///         winners).
+    function test_factoryThreadsEntropyIntoCircles() public {
         address keeper = address(0xCAFE01);
         CircleFactory f = new CircleFactory(impl, address(stable), address(0), keeper);
-        assertEq(f.vrfOperator(), keeper, "factory should expose its operator");
+        assertEq(f.entropy(), keeper, "factory should expose its entropy contract");
 
-        Circle c = Circle(f.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW));
-        assertEq(c.vrfOperator(), keeper, "circle must inherit the factory's operator");
+        Circle c = Circle(payable(f.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW)));
+        assertEq(c.entropyContract(), keeper, "circle must inherit the factory's entropy contract");
     }
 
     /// @notice A factory configured with address(0) still yields permissionless
     ///         circles — kept deliberately for local/dev and the demo scripts.
-    function test_zeroOperatorFactoryYieldsPermissionlessCircle() public {
-        Circle c = Circle(factory.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW));
-        assertEq(c.vrfOperator(), address(0));
+    function test_zeroEntropyFactoryYieldsPermissionlessCircle() public {
+        Circle c = Circle(payable(factory.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW)));
+        assertEq(c.entropyContract(), address(0));
+    }
+
+    /// @notice The factory must record the real caller as the circle's creator —
+    ///         not itself — or leftover VRF funding would refund to the factory
+    ///         (where it is unrecoverable) instead of the person who paid it.
+    function test_factoryThreadsCallerAsCreator() public {
+        address maker = address(0xBEEF01);
+        vm.prank(maker);
+        Circle c = Circle(payable(factory.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW)));
+        assertEq(c.creator(), maker, "creator must be createCircle's caller");
     }
 }

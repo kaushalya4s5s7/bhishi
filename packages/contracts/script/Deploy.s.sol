@@ -43,26 +43,26 @@ contract Deploy is Script {
         ReputationRegistry reputation = new ReputationRegistry(futureFactoryAddr);
         console.log("ReputationRegistry:", address(reputation));
 
-        // VRF operator = Gelato's "dedicated msg.sender" — the only address the
-        // vendored GelatoVRFConsumerBase accepts fulfilments from.
+        // Pyth Entropy contract — the only address a circle accepts draw
+        // callbacks from. `entropy` is immutable on the factory, so getting this
+        // wrong means a full redeploy.
         //
-        // ORDER MATTERS: fetch this BEFORE deploying. The dedicated msg.sender is
-        // assigned to your DEPLOYER address (not to the deployed contract), so you
-        // read it from https://app.gelato.cloud first, deploy with it set here,
-        // and only then create the VRF task pointing at the deployed contract.
-        // vrfOperator is immutable on the factory — getting this wrong means a
-        // full redeploy.
+        // Monad testnet: 0x825c0390f379C631f3Cf11A82a37D20BddF93c07
+        // (NOTE: the address in Monad's own docs is not Entropy — do not use it.)
+        // Fee is a flat ~0.126 MON per draw, SPONSORED by the circle, so members
+        // never spend native MON. Fund a circle via createCircle{value: ...} or by
+        // sending MON to it; leftovers refund to the creator on completion.
         //
         // address(0) leaves circles permissionless (anyone can fulfil a draw with
         // randomness of their choosing). Fine for local/demo, NEVER for real value.
-        address vrfOperator = vm.envOr("VRF_OPERATOR", address(0));
-        if (vrfOperator == address(0)) {
-            console.log("WARNING: VRF_OPERATOR unset -> circles will be PERMISSIONLESS (anyone can draw)");
+        address entropy = vm.envOr("PYTH_ENTROPY", address(0));
+        if (entropy == address(0)) {
+            console.log("WARNING: PYTH_ENTROPY unset -> circles will be PERMISSIONLESS (anyone can draw)");
         } else {
-            console.log("VRF operator (Gelato dedicated msg.sender):", vrfOperator);
+            console.log("Pyth Entropy:", entropy);
         }
 
-        CircleFactory factory = new CircleFactory(address(circleImpl), address(stable), address(reputation), vrfOperator);
+        CircleFactory factory = new CircleFactory(address(circleImpl), address(stable), address(reputation), entropy);
         console.log("CircleFactory:", address(factory));
 
         // Sanity check: factory address matches prediction

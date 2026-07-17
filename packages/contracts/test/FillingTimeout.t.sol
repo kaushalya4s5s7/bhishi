@@ -21,7 +21,7 @@ contract FillingTimeoutTest is Test {
         stable = new MockStable();
         impl = address(new Circle());
         factory = new CircleFactory(impl, address(stable), address(0), address(0));
-        circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        circle = Circle(payable(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
     }
 
     function _join(uint160 i) internal returns (address m) {
@@ -64,6 +64,6 @@ contract FillingTimeoutTest is Test {
 
     function test_implementationInitializerLocked() public {
         vm.expectRevert(Circle.AlreadyInitialized.selector);
-        Circle(impl).initialize(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW, address(stable), address(this), address(0), address(0));
+        Circle(payable(impl)).initialize(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW, address(stable), address(this), address(0), address(0), address(0));
     }
 }

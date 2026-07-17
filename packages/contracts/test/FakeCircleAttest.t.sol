@@ -6,15 +6,16 @@ import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {MockStable} from "../src/MockStable.sol";
-import {MockVRF} from "./mocks/MockVRF.sol";
+import {MockEntropy} from "./mocks/MockEntropy.sol";
+import {VrfFixture} from "./mocks/VrfFixture.sol";
 import {FakeCircle} from "./mocks/FakeCircle.sol";
 
 /// @notice LEAK 4: factory-gated reputation — only real, COMPLETED circles
 ///         can write attestations; forged callers revert.
-contract FakeCircleAttestTest is Test {
+contract FakeCircleAttestTest is Test, VrfFixture {
     MockStable        internal stable;
     CircleFactory     internal factory;
-    MockVRF           internal vrf;
+    MockEntropy           internal vrf;
     ReputationRegistry internal reputation;
 
     uint256 internal constant CONTRIB = 100e6;
@@ -28,7 +29,7 @@ contract FakeCircleAttestTest is Test {
         // Deploy the VRF mock BEFORE predicting the factory address: every
         // deployment bumps the deployer's nonce, so the prediction below must
         // be made once all prior deployments are done.
-        vrf = new MockVRF();
+        vrf = new MockEntropy(VRF_FEE);
         address impl = address(new Circle());
         // Circular dependency: factory needs reputation address; reputation needs factory address.
         // Resolution: predict the factory address using vm.computeCreateAddress, deploy registry
@@ -53,7 +54,7 @@ contract FakeCircleAttestTest is Test {
     // ─── LEAK 4b: Real completed circle writes attestations ──────────────────────
 
     function test_completedCircleWritesAttestation() public {
-        Circle circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        Circle circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         // Two members join
         for (uint160 i = 0; i < SEATS; i++) {
@@ -124,7 +125,7 @@ contract FakeCircleAttestTest is Test {
             circle.requestDraw();
             // requestDraw is called exactly once per iteration, so the circle's
             // requestId counter tracks the loop index r.
-            vrf.fulfill(address(circle), r, r); // deterministic winner selection
+            vrf.fulfillLatest(address(circle), r); // deterministic winner selection
         }
     }
 }

@@ -28,7 +28,7 @@ contract SlashFSMTest is Test {
     /// @notice 2-member circle: alice reveals, bob commits but misses reveal.
     ///         After slash(bob), state must be DRAW — not stuck in REVEAL.
     function test_slashLastNonRevealerAdvancesToDraw() public {
-        Circle circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        Circle circle = Circle(payable(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW)));
 
         address alice = address(0xA11CE);
         address bob   = address(0xB0B);
@@ -67,7 +67,7 @@ contract SlashFSMTest is Test {
 
     /// @notice AUCTION mode is now accepted at initialization (no longer a stub).
     function test_auctionModeAcceptedOnCreate() public {
-        Circle circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
+        Circle circle = Circle(payable(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION)));
         assertEq(uint256(circle.mode()), uint256(Mode.AUCTION));
         assertEq(uint256(circle.state()), uint256(Circle.State.FILLING));
     }
