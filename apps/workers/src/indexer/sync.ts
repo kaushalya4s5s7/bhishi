@@ -4,6 +4,7 @@ import { circleAbi } from '@bhishi/shared';
 import { getCircleEventsChunked, DEFAULT_CHUNK_SIZE } from '@bhishi/events';
 import { prisma, Prisma, type CircleMode, type CircleState } from '@bhishi/db';
 import { logger } from '../config.js';
+import { enqueueNotify, type NotifyKind } from '../queues.js';
 
 /** Ordinal -> name, matching Circle.sol's State enum exactly. */
 const STATE_BY_ORDINAL: CircleState[] = [
@@ -122,7 +123,9 @@ export async function syncCircle(
       update: {},
     });
 
-    await applyEvent(address.toLowerCase(), ev.name, ev.args);
+    // (txHash, logIndex) uniquely identifies this event; used as the notify
+    // jobId so a re-scan of the same block can't send a duplicate message.
+    await applyEvent(address.toLowerCase(), ev.name, ev.args, `${ev.transactionHash}:${ev.logIndex}`);
   }
 
   await prisma.circle.update({
@@ -146,8 +149,94 @@ function serializeArgs(args: Record<string, unknown>): Prisma.InputJsonValue {
   return out as Prisma.InputJsonValue;
 }
 
-/** Project an event onto the derived Member/Round rows. */
-async function applyEvent(circleAddress: string, name: string, args: Record<string, unknown>) {
+/** Circle.sol's COMMIT_WINDOW / REVEAL_WINDOW are both 1 day. */
+const COMMIT_WINDOW_MS = 24 * 3600 * 1000;
+/** Warn this long before a deadline. */
+const REMINDER_LEAD_MS = 6 * 3600 * 1000;
+
+/**
+ * Look up a member's contact details and enqueue a message.
+ *
+ * Contact info only exists for people who signed up via the waitlist, so this
+ * is best-effort: an on-chain member we have no email for is skipped silently
+ * rather than treated as an error. Notifications are a courtesy, never a
+ * dependency of the protocol.
+ */
+async function notifyMember(
+  address: string,
+  kind: NotifyKind,
+  vars: Record<string, string | number>,
+  dedupeId?: string,
+  delayMs?: number,
+) {
+  try {
+    const contact = await prisma.waitlistEntry.findFirst({
+      where: { walletAddress: { equals: address, mode: 'insensitive' } },
+      select: { email: true, whatsapp: true },
+    });
+    if (!contact) return;
+    await enqueueNotify(
+      { kind, email: contact.email, whatsapp: contact.whatsapp ?? undefined, userAddress: address, vars },
+      dedupeId ? `${kind}:${dedupeId}` : undefined,
+      delayMs,
+    );
+  } catch (err) {
+    // Never let a notification failure break indexing — chain state is the job.
+    logger.error({ err, address, kind }, 'failed to enqueue notification');
+  }
+}
+
+/**
+ * Schedule "your deadline is in ~6h" reminders for a round, as BullMQ *delayed*
+ * jobs rather than a polling loop — the queue fires them at the right moment
+ * and survives a worker restart.
+ *
+ * Fires for every joined member: the contract slashes anyone who doesn't reveal,
+ * so the warning is exactly what protects their bond.
+ */
+async function scheduleDeadlineReminders(
+  circleAddress: string,
+  round: number,
+  startedAt: Date,
+  dedupeId?: string,
+) {
+  try {
+    const members = await prisma.member.findMany({
+      where: { circleAddress, slashed: false },
+      select: { address: true },
+    });
+    // COMMIT closes ~1 day after the round starts; remind 6h before that.
+    const delay = startedAt.getTime() + COMMIT_WINDOW_MS - REMINDER_LEAD_MS - Date.now();
+    if (delay <= 0) return; // Indexing a historical round — the moment has passed.
+
+    for (const m of members) {
+      await notifyMember(
+        m.address,
+        'round_deadline_reminder',
+        { circle: circleAddress, round, phase: 'COMMIT', hoursLeft: 6 },
+        dedupeId ? `${dedupeId}:${m.address}` : undefined,
+        delay, // delayed job — BullMQ fires it 6h before the deadline
+      );
+    }
+  } catch (err) {
+    logger.error({ err, circleAddress, round }, 'failed to schedule reminders');
+  }
+}
+
+/**
+ * Project an event onto the derived Member/Round rows, and enqueue any member
+ * notification it implies.
+ *
+ * `dedupeId` is the event's (txHash, logIndex) — passed to BullMQ as the jobId
+ * so a re-indexed block can't send the same message twice. The indexer
+ * deliberately re-scans overlapping ranges on restart, so this matters.
+ */
+async function applyEvent(
+  circleAddress: string,
+  name: string,
+  args: Record<string, unknown>,
+  dedupeId?: string,
+) {
   const str = (v: unknown) => (typeof v === 'string' ? v.toLowerCase() : undefined);
 
   switch (name) {
@@ -175,6 +264,7 @@ async function applyEvent(circleAddress: string, name: string, args: Record<stri
         create: { circleAddress, roundNumber: round, phase: 'DRAW', winner: winner ?? null },
         update: { winner: winner ?? null },
       });
+      if (winner) await notifyMember(winner, 'payout_received', { circle: circleAddress, round }, dedupeId);
       return;
     }
     case 'Slashed': {
@@ -184,16 +274,24 @@ async function applyEvent(circleAddress: string, name: string, args: Record<stri
           where: { circleAddress, address: member },
           data: { slashed: true },
         });
+        await notifyMember(
+          member,
+          'slash_notice',
+          { circle: circleAddress, amount: String(args.bondSlashed ?? 0) },
+          dedupeId,
+        );
       }
       return;
     }
     case 'RoundStarted': {
       const round = Number(args.round ?? 0);
+      const startedAt = new Date();
       await prisma.round.upsert({
         where: { circleAddress_roundNumber: { circleAddress, roundNumber: round } },
-        create: { circleAddress, roundNumber: round, phase: 'COMMIT', startedAt: new Date() },
+        create: { circleAddress, roundNumber: round, phase: 'COMMIT', startedAt },
         update: { phase: 'COMMIT' },
       });
+      await scheduleDeadlineReminders(circleAddress, round, startedAt, dedupeId);
       return;
     }
     case 'DrawRequested': {

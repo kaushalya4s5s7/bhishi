@@ -1,0 +1,111 @@
+import { logger } from '../config.js';
+
+export interface SendResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface NotifyProvider {
+  readonly name: string;
+  send(to: string, subject: string, body: string): Promise<SendResult>;
+}
+
+/**
+ * Default driver: logs instead of sending.
+ *
+ * This is deliberately the fallback rather than a hard failure — the whole
+ * notify pipeline (queue, retries, dedupe, audit log) is exercisable without
+ * Twilio/Meta/Resend credentials, and swapping in a real provider is a config
+ * change, not a code change. It is obviously NOT delivery: nothing reaches a
+ * human. `notifyReady()` reports which channels are actually live so this can
+ * never be mistaken for a working integration in production.
+ */
+class LogProvider implements NotifyProvider {
+  constructor(readonly name: string) {}
+  async send(to: string, subject: string, body: string): Promise<SendResult> {
+    logger.warn({ provider: this.name, to, subject, body }, 'NOT DELIVERED — no provider configured; logging only');
+    return { ok: true };
+  }
+}
+
+/**
+ * Email via Resend. Uses fetch directly rather than the SDK to avoid a
+ * dependency for one endpoint.
+ */
+class ResendProvider implements NotifyProvider {
+  readonly name = 'resend';
+  constructor(private readonly apiKey: string, private readonly from: string) {}
+
+  async send(to: string, subject: string, body: string): Promise<SendResult> {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ from: this.from, to, subject, text: body }),
+      });
+      if (!res.ok) return { ok: false, error: `resend ${res.status}: ${await res.text()}` };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+}
+
+/** WhatsApp via Twilio's messaging API. */
+class TwilioWhatsAppProvider implements NotifyProvider {
+  readonly name = 'twilio-whatsapp';
+  constructor(
+    private readonly sid: string,
+    private readonly token: string,
+    private readonly from: string,
+  ) {}
+
+  async send(to: string, _subject: string, body: string): Promise<SendResult> {
+    try {
+      const url = `https://api.twilio.com/2010-04-01/Accounts/${this.sid}/Messages.json`;
+      const form = new URLSearchParams({
+        From: `whatsapp:${this.from}`,
+        To: `whatsapp:${to}`,
+        Body: body,
+      });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Basic ' + Buffer.from(`${this.sid}:${this.token}`).toString('base64'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: form,
+      });
+      if (!res.ok) return { ok: false, error: `twilio ${res.status}: ${await res.text()}` };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+}
+
+/** Selected once at import from env; falls back to the log driver. */
+export const emailProvider: NotifyProvider =
+  process.env.RESEND_API_KEY
+    ? new ResendProvider(process.env.RESEND_API_KEY, process.env.RESEND_FROM ?? 'noreply@bhishi.app')
+    : new LogProvider('email(log)');
+
+export const whatsappProvider: NotifyProvider =
+  process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_WHATSAPP_FROM
+    ? new TwilioWhatsAppProvider(
+        process.env.TWILIO_ACCOUNT_SID,
+        process.env.TWILIO_AUTH_TOKEN,
+        process.env.TWILIO_WHATSAPP_FROM,
+      )
+    : new LogProvider('whatsapp(log)');
+
+/** Which channels are genuinely wired — surfaced at boot and via /health. */
+export function notifyReady() {
+  return {
+    email: emailProvider.name !== 'email(log)',
+    whatsapp: whatsappProvider.name !== 'whatsapp(log)',
+  };
+}
