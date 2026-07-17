@@ -57,6 +57,15 @@ chooses the winner.
 
 ## A Real Auction Circle, Start to Finish (live on-chain)
 
+> **Which deployment:** the two step-by-step walkthroughs below are from an **earlier
+> permissionless deployment** (before the Pyth Entropy integration), where the draw was
+> settled directly rather than by Pyth's keeper. They're kept because they show a
+> *complete* 3-round cycle end-to-end — every commit, reveal, and settlement. For the
+> **current, Pyth-verified** contracts and the real external-randomness draws, see
+> [Deployed Contracts](#deployed-contracts-monad-testnet) and
+> [Verifiable randomness — proven on-chain](#verifiable-randomness--proven-on-chain) above.
+> All transactions here remain real and verifiable on the explorer.
+
 We ran one complete **auction-mode** circle end-to-end on Monad testnet — 3 people,
 3 monthly rounds, everyone wins exactly once. Here's what happened, in plain English,
 with the actual transaction for each step. Click any hash to verify it yourself.
@@ -145,6 +154,12 @@ has had their turn.
 won plus their 20 bond back), the circle reached **COMPLETED**, and the conservation check
 held after every round. Same guarantees as the auction — just a random winner instead of a
 bid-based one.
+
+> Both walkthrough circles above are still on-chain and show `state = COMPLETED`
+> ([auction `0x509b1505…`](https://testnet.monadexplorer.com/address/0x509b1505a382510cfcd5ae903332c2c728842f07),
+> [lucky-draw `0x1747d6be…`](https://testnet.monadexplorer.com/address/0x1747d6beae5b3759da8918b400d750109e397ae1)).
+> On the **current Pyth-wired deployment**, the same flows were re-run and each winner was
+> drawn by Pyth's keeper from drand — see the [randomness table](#verifiable-randomness--proven-on-chain) above.
 
 ## Architecture
 
