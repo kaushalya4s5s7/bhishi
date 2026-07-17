@@ -28,7 +28,7 @@ contract ReentrancyHarnessTest is Test {
     function setUp() public {
         token  = new ReentrantToken();  // mints 1_000_000e6 to this contract
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(token), address(0));
+        factory = new CircleFactory(impl, address(token), address(0), address(0));
         circle  = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
         // Wire up the attack target

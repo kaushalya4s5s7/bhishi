@@ -31,7 +31,7 @@ contract FakeCircleAttestTest is Test {
         uint256 factoryNonce = vm.getNonce(deployer) + 1; // registry deployed next (+0), factory after (+1)
         address predictedFactory = vm.computeCreateAddress(deployer, factoryNonce);
         reputation = new ReputationRegistry(predictedFactory);   // nonce +0
-        factory    = new CircleFactory(impl, address(stable), address(reputation)); // nonce +1
+        factory    = new CircleFactory(impl, address(stable), address(reputation), address(0)); // nonce +1
         // Verify the prediction was correct
         require(address(factory) == predictedFactory, "factory address mismatch");
     }

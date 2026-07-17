@@ -20,7 +20,7 @@ contract SlashingTest is Test {
     function setUp() public {
         stable = new MockStable();
         address impl = address(new Circle());
-        CircleFactory factory = new CircleFactory(impl, address(stable), address(0));
+        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(0));
         circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
         for (uint160 i = 0; i < SEATS; i++) {
@@ -89,7 +89,7 @@ contract SlashingTest is Test {
         // bond=301e6+1: remainder after slash = 301_000_001; 301_000_001/2=150_500_000 r1 → dust=1
         MockStable stab2 = new MockStable();
         address impl2 = address(new Circle());
-        CircleFactory factory2 = new CircleFactory(impl2, address(stab2), address(0));
+        CircleFactory factory2 = new CircleFactory(impl2, address(stab2), address(0), address(0));
         uint256 dustBond = 301e6 + 1;
         Circle c2 = Circle(factory2.createCircle(CONTRIB, SEATS, dustBond, Mode.LUCKY_DRAW));
 

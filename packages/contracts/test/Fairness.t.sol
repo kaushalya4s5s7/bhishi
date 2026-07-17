@@ -23,7 +23,7 @@ contract FairnessTest is Test {
         stable = new MockStable();
         vrf    = new MockVRF();
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(stable), address(0));
+        factory = new CircleFactory(impl, address(stable), address(0), address(0));
         circle  = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
         for (uint160 i = 0; i < SEATS; i++) {
@@ -173,5 +173,51 @@ contract FairnessTest is Test {
         vrf.fulfill(address(circle), 99, 12345);
         assertEq(uint256(circle.state()), uint256(Circle.State.STALLED),
             "should transition to STALLED when no eligible members");
+    }
+
+    // ─── VRF operator authorization (B0) ──────────────────────────────────────
+
+    /// @notice When a real vrfOperator is configured, ONLY that operator may
+    ///         fulfil the draw. This is what makes the winner un-forgeable in
+    ///         production: without it, any caller could submit chosen randomness
+    ///         and hand themselves the pot.
+    function test_onlyVrfOperatorMayFulfil() public {
+        address keeper = address(0xBEEF);
+        CircleFactory f = new CircleFactory(address(new Circle()), address(stable), address(0), keeper);
+        Circle c = Circle(f.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
+        assertEq(c.vrfOperator(), keeper);
+
+        // Fill + drive the circle to DRAW.
+        address[] memory ms = new address[](SEATS);
+        for (uint160 i = 0; i < SEATS; i++) {
+            address m = address(uint160(0x9000 + i));
+            ms[i] = m;
+            deal(address(stable), m, (BOND + CONTRIB) * 20);
+            vm.prank(m); stable.approve(address(c), type(uint256).max);
+            vm.prank(m); c.join();
+        }
+        for (uint256 i = 0; i < SEATS; i++) {
+            vm.prank(ms[i]);
+            c.commit(_commitment(ms[i], CONTRIB, bytes32(uint256(700 + i))));
+        }
+        c.advanceToReveal();
+        for (uint256 i = 0; i < SEATS; i++) {
+            vm.prank(ms[i]);
+            c.reveal(CONTRIB, bytes32(uint256(700 + i)));
+        }
+        assertEq(uint256(c.state()), uint256(Circle.State.DRAW));
+        c.requestDraw();
+
+        // A random address must NOT be able to fulfil.
+        vm.prank(address(0xBAD));
+        vm.expectRevert(Circle.NotVrfOperator.selector);
+        c.fulfillRandomness(0, 12345, "");
+
+        // The configured operator can.
+        vm.prank(keeper);
+        c.fulfillRandomness(0, 12345, "");
+        uint256 wins;
+        for (uint256 i = 0; i < SEATS; i++) if (c.hasWon(ms[i])) wins++;
+        assertEq(wins, 1, "operator's fulfilment should pick exactly one winner");
     }
 }

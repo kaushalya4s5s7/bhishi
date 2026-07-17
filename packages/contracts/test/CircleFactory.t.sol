@@ -18,7 +18,7 @@ contract CircleFactoryTest is Test {
     function setUp() public {
         stable = new MockStable();
         impl = address(new Circle());
-        factory = new CircleFactory(impl, address(stable), address(0));
+        factory = new CircleFactory(impl, address(stable), address(0), address(0));
     }
 
     function test_createCircleDeploysCloneAndRegisters() public {
@@ -41,5 +41,26 @@ contract CircleFactoryTest is Test {
         address a = factory.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW);
         address b = factory.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW);
         assertTrue(a != b);
+    }
+
+    // ─── VRF operator wiring (B0) ─────────────────────────────────────────────
+
+    /// @notice The factory's configured vrfOperator must be threaded into every
+    ///         circle it creates — not hardcoded to address(0) (which would leave
+    ///         fulfillRandomness permissionless, i.e. anyone could pick winners).
+    function test_factoryThreadsVrfOperatorIntoCircles() public {
+        address keeper = address(0xCAFE01);
+        CircleFactory f = new CircleFactory(impl, address(stable), address(0), keeper);
+        assertEq(f.vrfOperator(), keeper, "factory should expose its operator");
+
+        Circle c = Circle(f.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW));
+        assertEq(c.vrfOperator(), keeper, "circle must inherit the factory's operator");
+    }
+
+    /// @notice A factory configured with address(0) still yields permissionless
+    ///         circles — kept deliberately for local/dev and the demo scripts.
+    function test_zeroOperatorFactoryYieldsPermissionlessCircle() public {
+        Circle c = Circle(factory.createCircle(CONTRIB, SEATS, VALID_BOND, Mode.LUCKY_DRAW));
+        assertEq(c.vrfOperator(), address(0));
     }
 }

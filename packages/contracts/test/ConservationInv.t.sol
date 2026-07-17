@@ -352,7 +352,7 @@ contract ConservationInvTest is StdInvariant, Test {
     function setUp() public {
         stable      = new MockStable();
         address impl = address(new Circle());
-        CircleFactory factory = new CircleFactory(impl, address(stable), address(0));
+        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(0));
         circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
         handler = new CircleHandler(circle, stable);
@@ -413,7 +413,7 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
     function setUp() public {
         stable      = new MockStable();
         address impl = address(new Circle());
-        CircleFactory factory = new CircleFactory(impl, address(stable), address(0));
+        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(0));
         circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
 
         handler = new CircleHandler(circle, stable);

@@ -22,7 +22,7 @@ contract SlashFSMTest is Test {
     function setUp() public {
         stable  = new MockStable();
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(stable), address(0));
+        factory = new CircleFactory(impl, address(stable), address(0), address(0));
     }
 
     /// @notice 2-member circle: alice reveals, bob commits but misses reveal.

@@ -17,7 +17,7 @@ contract CustodyTest is Test {
     function setUp() public {
         stable = new MockStable();
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(stable), address(0));
+        factory = new CircleFactory(impl, address(stable), address(0), address(0));
         // organizer creates circle
         vm.prank(organizer);
         circle = Circle(factory.createCircle(100e6, 2, 300e6, Mode.LUCKY_DRAW));

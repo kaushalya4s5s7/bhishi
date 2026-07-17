@@ -17,6 +17,12 @@ contract CircleFactory {
     address public immutable stable;
     /// @notice Reputation registry passed to circles (may be address(0) for now).
     address public immutable reputation;
+    /// @notice VRF operator threaded into every circle this factory creates.
+    ///         Set once at deploy to the keeper's address so only that keeper may
+    ///         call fulfillRandomness. address(0) leaves circles permissionless —
+    ///         acceptable only for local/dev and the demo scripts, never for a
+    ///         deployment holding real value.
+    address public immutable vrfOperator;
 
     /// @notice Canonical registry of factory-deployed circles.
     mapping(address => bool) public isCircle;
@@ -30,10 +36,11 @@ contract CircleFactory {
         Mode mode
     );
 
-    constructor(address _implementation, address _stable, address _reputation) {
+    constructor(address _implementation, address _stable, address _reputation, address _vrfOperator) {
         implementation = _implementation;
         stable = _stable;
         reputation = _reputation;
+        vrfOperator = _vrfOperator;
     }
 
     /// @notice Deploy and register a new circle clone.
@@ -46,7 +53,7 @@ contract CircleFactory {
         if (bond < (seats - 1) * contribution) revert BondTooLow();
 
         circle = Clones.clone(implementation);
-        Circle(circle).initialize(contribution, seats, bond, mode, stable, address(this), reputation, address(0));
+        Circle(circle).initialize(contribution, seats, bond, mode, stable, address(this), reputation, vrfOperator);
         isCircle[circle] = true;
 
         emit CircleCreated(circle, msg.sender, contribution, seats, bond, mode);
