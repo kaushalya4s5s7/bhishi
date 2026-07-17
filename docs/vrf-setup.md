@@ -1,8 +1,35 @@
 # Gelato VRF Setup (Monad Testnet)
 
-How to deploy Bhishi with **trustless randomness**. Gelato VRF is confirmed to
-support Monad Testnet (see Gelato's *VRF → Supported Networks*, which lists
-"Monad, Testnet").
+How to deploy Bhishi with **trustless randomness**.
+
+> ## ⚠️ Status (2026-07-17): provider not yet settled
+>
+> `Circle` is a standards-compliant `GelatoVRFConsumerBase` consumer and the
+> integration is fully tested (67/67). But **no VRF provider has been confirmed
+> working on Monad testnet yet**, so the deployed stack still runs with a
+> permissioned/permissionless operator rather than real drand randomness.
+>
+> What was verified on 2026-07-17, by calling each contract directly:
+>
+> | Provider | Monad's docs | On-chain reality |
+> |---|---|---|
+> | Gelato VRF | listed ✅ (no address) | VRF app (`app.gelato.network/vrf`) shows **"This platform is being deprecated"**; the new `app.gelato.cloud` has **no VRF** (`/vrf` → 404) and its migration page never mentions VRF |
+> | Pyth Entropy `0x36825bf3…` | listed w/ address | 16KB of code deployed, but `getFeeV2()` and `getDefaultProvider()` **both revert** — not answering Entropy's own API |
+> | Switchboard `0xD3860E2C…` | listed w/ address | **3 bytes — not deployed at all** |
+> | Supra dVRF `0x95bfe6e9…` | listed | 409 bytes (likely a proxy) — unverified |
+>
+> **Conclusion: the ecosystem's docs are drifting from reality here.** Do not
+> trust a documented address without calling it first. Settle the provider by
+> asking in Monad's/Pyth's Discord, then wire it up — the consumer interface is
+> ready and the swap is localized.
+>
+> **This is not a funds risk.** If no VRF ever fulfils a draw, `VRF_TIMEOUT` →
+> `STALLED` → permissionless `reclaimOnStall()` returns every member's pool and
+> bond. Randomness affects *fairness of the draw*, never custody.
+
+The rest of this document describes the Gelato path, which the contract already
+implements. Gelato's docs list "Monad, Testnet" as supported — but see the
+status box above before relying on that.
 
 ## How it actually works (read this first)
 
