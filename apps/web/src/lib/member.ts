@@ -71,11 +71,24 @@ export function useMember(): Member {
     | { address?: string }
     | undefined;
 
-  // Prefer the smart account when one exists — it is the sponsored identity.
-  // Otherwise fall back to the embedded EOA. Chosen ONCE, here.
+  // `smartClient` is present exactly when the app has smart wallets enabled
+  // (SmartWalletsProvider mounted + SDK config). When it is, EVERY member action
+  // must be sponsored — the embedded EOA has no MON and must never be the sender.
+  const smartWalletsExpected = Boolean(smartClient);
   const smartAddress = smartAccount?.address as `0x${string}` | undefined;
   const gasless = Boolean(smartAddress && smartClient);
-  const address = (gasless ? smartAddress : (embedded?.address as `0x${string}` | undefined));
+
+  // Identity selection — chosen ONCE, here.
+  //  • Smart wallets expected: use the smart account, and NEVER fall back to the
+  //    EOA. On a fresh login the smart account lands in user.linkedAccounts a few
+  //    ticks AFTER the embedded EOA appears; falling back during that window is
+  //    the race that sends an unsponsored EOA tx → "Signer had insufficient
+  //    balance". So while it is still linking, address stays undefined (member
+  //    not ready) rather than resolving early to the EOA.
+  //  • Smart wallets disabled: plain-EOA app, use the embedded EOA as before.
+  const address = smartWalletsExpected
+    ? smartAddress
+    : (embedded?.address as `0x${string}` | undefined);
 
   async function write({
     address: to,
@@ -85,6 +98,13 @@ export function useMember(): Member {
     value,
   }: { address: `0x${string}`; abi: any; functionName: string; args?: any[]; value?: bigint }) {
     if (!address) throw new Error('Not signed in');
+
+    // Sponsorship is expected but the smart account has not finished linking.
+    // Do NOT quietly send from the EOA (it has no MON) — that is exactly the
+    // race this guard exists to stop. Ask the caller to retry in a moment.
+    if (smartWalletsExpected && !gasless) {
+      throw new Error('Setting up your sponsored wallet — one moment, then try again.');
+    }
 
     if (gasless) {
       // Sponsored path: the paymaster registered in the Privy Dashboard pays gas,
@@ -124,5 +144,11 @@ export function useMember(): Member {
     return hash as `0x${string}`;
   }
 
-  return { address, gasless, ready: privyReady, write, eoaAddress, writeValue };
+  // Ready only once Privy is up AND (if not authenticated) or the sender
+  // identity has actually resolved. When smart wallets are expected this stays
+  // false through the smart-account linking window, keeping claim/join buttons
+  // in their "Preparing wallet…" state instead of firing an unsponsored EOA tx.
+  const ready = privyReady && (!user || Boolean(address));
+
+  return { address, gasless, ready, write, eoaAddress, writeValue };
 }
