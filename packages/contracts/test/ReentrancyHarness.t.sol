@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReentrantToken} from "./mocks/ReentrantToken.sol";
+import {MockVRF} from "./mocks/MockVRF.sol";
 
 /// @notice Proves that Circle.claim() is safe against reentrancy attacks.
 ///         CEI (Checks-Effects-Interactions) zeros the claimable balance before
@@ -14,6 +15,7 @@ import {ReentrantToken} from "./mocks/ReentrantToken.sol";
 contract ReentrancyHarnessTest is Test {
     ReentrantToken internal token;
     CircleFactory  internal factory;
+    MockVRF        internal vrf;
     Circle         internal circle;
 
     uint256 internal constant CONTRIB = 100e6;
@@ -27,8 +29,9 @@ contract ReentrancyHarnessTest is Test {
 
     function setUp() public {
         token  = new ReentrantToken();  // mints 1_000_000e6 to this contract
+        vrf    = new MockVRF();
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(token), address(0), address(0));
+        factory = new CircleFactory(impl, address(token), address(0), address(vrf));
         circle  = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
         // Wire up the attack target
@@ -55,6 +58,10 @@ contract ReentrancyHarnessTest is Test {
     }
 
     /// @notice Full round: commit → advanceToReveal → reveal → requestDraw → fulfillRandomness
+    /// Counts requestDraw calls so far: the circle's requestId counter starts
+    /// at 0 and increments once per request.
+    uint256 internal nextRequestId;
+
     function _playOneRound(uint256 rand) internal {
         address[2] memory members = [alice, bob];
 
@@ -81,7 +88,7 @@ contract ReentrancyHarnessTest is Test {
 
         // Draw
         circle.requestDraw();
-        circle.fulfillRandomness(0, rand, "");
+        vrf.fulfill(address(circle), nextRequestId++, rand);
     }
 
     /// @notice Core reentrancy test:

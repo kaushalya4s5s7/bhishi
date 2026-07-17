@@ -7,6 +7,12 @@ optimizer_runs = 200
 solc_version = "0.8.30"
 fs_permissions = [{ access = "read-write", path = "./cache" }]
 
+# Gelato's VRF base derives the drand round from
+# `block.timestamp - 1692803367` (drand genesis, Aug 2023). Foundry's default
+# block.timestamp of 1 underflows that subtraction, reverting every draw.
+# Start the EVM clock at a realistic post-genesis time so tests match mainnet.
+block_timestamp = 1750000000
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
 [rpc_endpoints]

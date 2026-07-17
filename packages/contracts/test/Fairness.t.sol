@@ -23,7 +23,7 @@ contract FairnessTest is Test {
         stable = new MockStable();
         vrf    = new MockVRF();
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(stable), address(0), address(0));
+        factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
         circle  = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
         for (uint160 i = 0; i < SEATS; i++) {
@@ -160,9 +160,13 @@ contract FairnessTest is Test {
         // the first winner, then manually set hasWon for remaining two via store.
         // Actually simplest: just use cheatcode store on each member's hasWon slot.
 
-        // hasWon is at storage slot 8 (verified via `forge inspect Circle storage`).
+        // hasWon is at storage slot 10 (verified via `forge inspect Circle storage`).
+        // NOTE: it moved from slot 8 -> 10 when Circle inherited
+        // GelatoVRFConsumerBase, whose requestPending/requestedHash occupy slots
+        // 0 and 1 ahead of Circle's own variables. Re-check with `forge inspect`
+        // if the inheritance chain or variable order ever changes.
         // For a mapping: element slot = keccak256(abi.encode(key, mappingSlot))
-        uint256 hasWonSlot = 8;
+        uint256 hasWonSlot = 10;
         for (uint256 i = 0; i < addrs.length; i++) {
             bytes32 slot = keccak256(abi.encode(addrs[i], hasWonSlot));
             vm.store(address(circle), slot, bytes32(uint256(1)));
@@ -170,7 +174,7 @@ contract FairnessTest is Test {
         }
 
         // Now fulfillRandomness should see eligibleCount==0 and stall
-        vrf.fulfill(address(circle), 99, 12345);
+        vrf.fulfill(address(circle), 0, 12345);
         assertEq(uint256(circle.state()), uint256(Circle.State.STALLED),
             "should transition to STALLED when no eligible members");
     }
@@ -182,7 +186,10 @@ contract FairnessTest is Test {
     ///         production: without it, any caller could submit chosen randomness
     ///         and hand themselves the pot.
     function test_onlyVrfOperatorMayFulfil() public {
-        address keeper = address(0xBEEF);
+        // The operator is a MockVRF so it can build the exact dataWithRound
+        // payload Gelato's base contract demands.
+        MockVRF keeperVrf = new MockVRF();
+        address keeper = address(keeperVrf);
         CircleFactory f = new CircleFactory(address(new Circle()), address(stable), address(0), keeper);
         Circle c = Circle(f.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
         assertEq(c.vrfOperator(), keeper);
@@ -208,14 +215,18 @@ contract FairnessTest is Test {
         assertEq(uint256(c.state()), uint256(Circle.State.DRAW));
         c.requestDraw();
 
-        // A random address must NOT be able to fulfil.
+        // Build the payload BEFORE arming the cheatcodes: an intervening call to
+        // the mock would consume the prank / expectRevert.
+        bytes memory data = keeperVrf.payload(0);
+
+        // A random address must NOT be able to fulfil. The Gelato base rejects
+        // any caller that is not the dedicated msg.sender.
         vm.prank(address(0xBAD));
-        vm.expectRevert(Circle.NotVrfOperator.selector);
-        c.fulfillRandomness(0, 12345, "");
+        vm.expectRevert("only operator");
+        c.fulfillRandomness(12345, data);
 
         // The configured operator can.
-        vm.prank(keeper);
-        c.fulfillRandomness(0, 12345, "");
+        keeperVrf.fulfill(address(c), 0, 12345);
         uint256 wins;
         for (uint256 i = 0; i < SEATS; i++) if (c.hasWon(ms[i])) wins++;
         assertEq(wins, 1, "operator's fulfilment should pick exactly one winner");

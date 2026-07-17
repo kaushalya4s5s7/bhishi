@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IGelatoVRFConsumer} from "./interfaces/IGelatoVRFConsumer.sol";
+import {GelatoVRFConsumerBase} from "./vendor/gelato/GelatoVRFConsumerBase.sol";
 import {IReputationRegistry} from "./interfaces/IReputationRegistry.sol";
 
 /// @notice Distribution mechanism for a circle's pot each round.
@@ -18,7 +18,7 @@ enum Mode {
 ///         cloned per-circle by CircleFactory.
 ///         M3: FILLING → ACTIVE join flow + FILLING_TIMEOUT refund (LEAK 6).
 ///         M4: commit-reveal rounds + auto-slash with dust bucket (LEAK 3, money shot 3).
-contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
+contract Circle is ReentrancyGuard, GelatoVRFConsumerBase {
     using SafeERC20 for IERC20;
 
     // ─── errors ────────────────────────────────────────────────────────────────
@@ -378,20 +378,33 @@ contract Circle is ReentrancyGuard, IGelatoVRFConsumer {
         if (state != State.DRAW) revert NotDrawPhase();
         if (drawRequestedAt != 0) revert DrawAlreadyRequested();
         drawRequestedAt = block.timestamp;
+
+        // THIS is the Gelato VRF request: _requestRandomness emits
+        // RequestedRandomness(round, data), which Gelato's nodes watch for and
+        // answer by calling fulfillRandomness with drand randomness. There is no
+        // off-chain API to call — the event is the request.
+        _requestRandomness("");
+
         emit DrawRequested(currentRound, drawRequestedAt);
     }
 
-    // ─── fulfillRandomness (Gelato VRF callback) ───────────────────────────────
-    /// @notice Called by the VRF operator with verifiable randomness.
-    ///         Picks a winner from eligible (joined && !hasWon) members,
-    ///         credits roundPool to winner's claimable, and advances state.
-    function fulfillRandomness(uint256 /*requestId*/, uint256 randomness, bytes calldata /*extraData*/)
-        external
+    /// @notice Gelato's dedicated msg.sender for this VRF task — the only
+    ///         address the base contract accepts fulfilments from.
+    function _operator() internal view override returns (address) {
+        return vrfOperator;
+    }
+
+    // ─── _fulfillRandomness (Gelato VRF callback) ──────────────────────────────
+    /// @notice Invoked by GelatoVRFConsumerBase.fulfillRandomness after it has
+    ///         checked msg.sender == _operator(), matched the request hash, and
+    ///         domain-separated the drand randomness with this address/chainid/
+    ///         requestId. Picks a winner from eligible (joined && !hasWon)
+    ///         members, credits the pot, and advances state.
+    function _fulfillRandomness(uint256 randomness, uint256 /*requestId*/, bytes memory /*extraData*/)
+        internal
         override
         nonReentrant
     {
-        // Auth: if vrfOperator is set, only they may call; address(0) = permissionless (tests)
-        if (vrfOperator != address(0) && msg.sender != vrfOperator) revert NotVrfOperator();
         if (state != State.DRAW) revert NotDrawPhase();
         if (drawRequestedAt == 0) revert DrawNotRequested();
 

@@ -5,11 +5,13 @@ import {Test} from "forge-std/Test.sol";
 import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {MockStable} from "../src/MockStable.sol";
+import {MockVRF} from "./mocks/MockVRF.sol";
 
 /// @notice Auction (Mode.AUCTION) round mechanics — sealed-bid discount chit fund.
 contract AuctionTest is Test {
     MockStable    internal stable;
     CircleFactory internal factory;
+    MockVRF internal vrf;
 
     uint256 internal constant CONTRIB = 100e6;
     uint256 internal constant SEATS   = 3;
@@ -21,8 +23,9 @@ contract AuctionTest is Test {
 
     function setUp() public {
         stable  = new MockStable();
+        vrf     = new MockVRF();
         address impl = address(new Circle());
-        factory = new CircleFactory(impl, address(stable), address(0), address(0));
+        factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
     }
 
     function _claimable(Circle circle, address who) internal view returns (uint256 claimable) {
@@ -58,7 +61,7 @@ contract AuctionTest is Test {
 
         assertEq(uint256(circle.state()), uint256(Circle.State.DRAW));
         circle.requestDraw();
-        circle.fulfillRandomness(0, 42, "");
+        vrf.fulfill(address(circle), 0, 42);
 
         assertEq(uint256(circle.state()), uint256(Circle.State.COMMIT));
         assertEq(circle.currentRound(), 1);
@@ -148,7 +151,7 @@ contract AuctionTest is Test {
 
         assertEq(uint256(circle.state()), uint256(Circle.State.DRAW));
         circle.requestDraw();
-        circle.fulfillRandomness(0, 999, "");
+        vrf.fulfill(address(circle), 0, 999);
 
         assertTrue(circle.hasWon(bob), "highest unique bidder must win");
         assertFalse(circle.hasWon(alice));
@@ -177,7 +180,7 @@ contract AuctionTest is Test {
         vm.prank(carol); circle.reveal(0, saltC);
 
         circle.requestDraw();
-        circle.fulfillRandomness(0, 1, "");
+        vrf.fulfill(address(circle), 0, 1);
 
         uint256 wins = (circle.hasWon(alice) ? 1 : 0) + (circle.hasWon(bob) ? 1 : 0) + (circle.hasWon(carol) ? 1 : 0);
         assertEq(wins, 1, "exactly one member should win via VRF tie-break");
@@ -203,7 +206,7 @@ contract AuctionTest is Test {
         vm.prank(carol); circle.reveal(10e6, saltC);
 
         circle.requestDraw();
-        circle.fulfillRandomness(0, 3, "");
+        vrf.fulfill(address(circle), 0, 3);
 
         assertFalse(circle.hasWon(carol), "untied lower bidder must never win a tied round");
         bool aliceWon = circle.hasWon(alice);
@@ -244,7 +247,7 @@ contract AuctionTest is Test {
                 vm.prank(who); circle.reveal(0, salt);
             }
             circle.requestDraw();
-            circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked(round, block.timestamp))), "");
+            vrf.fulfill(address(circle), round, uint256(keccak256(abi.encodePacked(round, block.timestamp))));
         }
 
         address lastBidder;
@@ -261,7 +264,7 @@ contract AuctionTest is Test {
         vm.prank(lastBidder); circle.reveal(30e6, saltFinal);
 
         circle.requestDraw();
-        circle.fulfillRandomness(0, 777, "");
+        vrf.fulfill(address(circle), 2, 777);
 
         assertTrue(circle.hasWon(lastBidder), "sole remaining bidder must win outright");
         assertEq(uint256(circle.state()), uint256(Circle.State.COMPLETED));
@@ -293,7 +296,7 @@ contract AuctionTest is Test {
                 vm.prank(who); circle.reveal(bids[i], salt);
             }
             circle.requestDraw();
-            circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked(round))), "");
+            vrf.fulfill(address(circle), round, uint256(keccak256(abi.encodePacked(round))));
 
             uint256 totalClaimable = _claimable(circle, alice)
                 + _claimable(circle, bob)

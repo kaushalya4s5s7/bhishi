@@ -6,6 +6,7 @@ import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {MockStable} from "../src/MockStable.sol";
+import {MockVRF} from "./mocks/MockVRF.sol";
 
 /// @notice Handler that drives Circle state transitions for invariant testing.
 ///         The invariant: circle.balanceOf == totalClaimable + dustAccrued + undrawnPools
@@ -60,7 +61,10 @@ contract CircleHandler is Test {
     uint256 public capRevertCount;
     uint256 public roundsDriven;
 
-    constructor(Circle _circle, MockStable _stable) {
+    MockVRF internal vrf;
+
+    constructor(Circle _circle, MockStable _stable, MockVRF _vrf) {
+        vrf = _vrf;
         circle = _circle;
         stable = _stable;
         // Pre-approve
@@ -221,7 +225,7 @@ contract CircleHandler is Test {
         if (_state() == uint256(Circle.State.DRAW)) {
             try circle.requestDraw() {} catch {}
             if (circle.drawRequestedAt() != 0) {
-                try circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked(bidSeed, callCount))), "") {
+                try vrf.fulfill(address(circle), circle.currentRound(), uint256(keccak256(abi.encodePacked(bidSeed, callCount)))) {
                     roundsDriven++;
                 } catch {}
             }
@@ -312,7 +316,7 @@ contract CircleHandler is Test {
     function fulfillRandomness(uint256 rand) external {
         if (_state() != uint256(Circle.State.DRAW)) return;
         if (circle.drawRequestedAt() == 0) return;
-        try circle.fulfillRandomness(0, rand, "") {} catch {}
+        try vrf.fulfill(address(circle), circle.currentRound(), rand) {} catch {}
     }
 
     function reclaimOnStall() external {
@@ -343,6 +347,7 @@ contract CircleHandler is Test {
 contract ConservationInvTest is StdInvariant, Test {
     Circle          internal circle;
     MockStable      internal stable;
+    MockVRF         internal vrf;
     CircleHandler   internal handler;
 
     uint256 constant CONTRIB = 100e6;
@@ -351,11 +356,12 @@ contract ConservationInvTest is StdInvariant, Test {
 
     function setUp() public {
         stable      = new MockStable();
+        vrf         = new MockVRF();
         address impl = address(new Circle());
-        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(0));
+        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
         circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.LUCKY_DRAW));
 
-        handler = new CircleHandler(circle, stable);
+        handler = new CircleHandler(circle, stable, vrf);
 
         targetContract(address(handler));
     }
@@ -383,6 +389,7 @@ contract ConservationInvTest is StdInvariant, Test {
 contract ConservationInvAuctionTest is StdInvariant, Test {
     Circle          internal circle;
     MockStable      internal stable;
+    MockVRF         internal vrf;
     CircleHandler   internal handler;
 
     uint256 constant CONTRIB = 100e6;
@@ -412,11 +419,12 @@ contract ConservationInvAuctionTest is StdInvariant, Test {
 
     function setUp() public {
         stable      = new MockStable();
+        vrf         = new MockVRF();
         address impl = address(new Circle());
-        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(0));
+        CircleFactory factory = new CircleFactory(impl, address(stable), address(0), address(vrf));
         circle = Circle(factory.createCircle(CONTRIB, SEATS, BOND, Mode.AUCTION));
 
-        handler = new CircleHandler(circle, stable);
+        handler = new CircleHandler(circle, stable, vrf);
 
         // Only drive the guided round action + a few money-moving actions.
         // Restricting the selector set keeps each run's call budget focused on

@@ -6,6 +6,7 @@ import {Circle, Mode} from "../src/Circle.sol";
 import {CircleFactory} from "../src/CircleFactory.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {MockStable} from "../src/MockStable.sol";
+import {MockVRF} from "./mocks/MockVRF.sol";
 import {FakeCircle} from "./mocks/FakeCircle.sol";
 
 /// @notice LEAK 4: factory-gated reputation — only real, COMPLETED circles
@@ -13,6 +14,7 @@ import {FakeCircle} from "./mocks/FakeCircle.sol";
 contract FakeCircleAttestTest is Test {
     MockStable        internal stable;
     CircleFactory     internal factory;
+    MockVRF           internal vrf;
     ReputationRegistry internal reputation;
 
     uint256 internal constant CONTRIB = 100e6;
@@ -23,6 +25,10 @@ contract FakeCircleAttestTest is Test {
 
     function setUp() public {
         stable = new MockStable();
+        // Deploy the VRF mock BEFORE predicting the factory address: every
+        // deployment bumps the deployer's nonce, so the prediction below must
+        // be made once all prior deployments are done.
+        vrf = new MockVRF();
         address impl = address(new Circle());
         // Circular dependency: factory needs reputation address; reputation needs factory address.
         // Resolution: predict the factory address using vm.computeCreateAddress, deploy registry
@@ -31,7 +37,7 @@ contract FakeCircleAttestTest is Test {
         uint256 factoryNonce = vm.getNonce(deployer) + 1; // registry deployed next (+0), factory after (+1)
         address predictedFactory = vm.computeCreateAddress(deployer, factoryNonce);
         reputation = new ReputationRegistry(predictedFactory);   // nonce +0
-        factory    = new CircleFactory(impl, address(stable), address(reputation), address(0)); // nonce +1
+        factory    = new CircleFactory(impl, address(stable), address(reputation), address(vrf)); // nonce +1
         // Verify the prediction was correct
         require(address(factory) == predictedFactory, "factory address mismatch");
     }
@@ -116,7 +122,9 @@ contract FakeCircleAttestTest is Test {
 
             assertEq(uint256(circle.state()), uint256(Circle.State.DRAW), "expected DRAW");
             circle.requestDraw();
-            circle.fulfillRandomness(0, r, ""); // deterministic winner selection
+            // requestDraw is called exactly once per iteration, so the circle's
+            // requestId counter tracks the loop index r.
+            vrf.fulfill(address(circle), r, r); // deterministic winner selection
         }
     }
 }

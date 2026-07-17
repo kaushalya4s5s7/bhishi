@@ -1,0 +1,3 @@
+
+# Local script run artifacts (contain run metadata; cache/ holds sensitive values)
+broadcast/

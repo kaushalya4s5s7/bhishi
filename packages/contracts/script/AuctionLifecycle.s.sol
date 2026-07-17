@@ -109,11 +109,12 @@ contract AuctionLifecycle is Script {
             circle.reveal(bids[i], salt);
         }
 
-        // DRAW (permissionless fulfill since vrfOperator == address(0))
+        // DRAW. The deployer must be the circle's configured vrfOperator (Gelato's
+        // dedicated msg.sender in production) for this fulfilment to be accepted.
         vm.broadcast(deployerKey);
         circle.requestDraw();
         vm.broadcast(deployerKey);
-        circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked("rand", round))), "");
+        circle.fulfillRandomness(uint256(keccak256(abi.encodePacked("rand", round))), _vrfPayload(round));
     }
 
     function _report(uint256 round) internal view {
@@ -137,5 +138,18 @@ contract AuctionLifecycle is Script {
         console.log("  claim+dust+undrawn+bonds:", rhs);
         require(bal == rhs, "CONSERVATION VIOLATED on-chain");
         console.log("  [OK] conservation holds");
+    }
+
+    /// @notice Rebuild the exact `dataWithRound` payload Gelato echoes back to
+    ///         the consumer: abi.encode(round, abi.encode(requestId, extraData)).
+    ///         Mirrors GelatoVRFConsumerBase's private _round(). The consumer
+    ///         SILENTLY ignores a fulfilment whose hash does not match the one it
+    ///         stored at request time, so the round used here must be the round of
+    ///         the block in which requestDraw() ran.
+    function _vrfPayload(uint256 requestId) internal view returns (bytes memory) {
+        uint256 elapsedFromGenesis = block.timestamp - 1692803367;
+        uint256 currentRound = (elapsedFromGenesis / 3) + 1;
+        uint256 round_ = block.chainid == 1 ? currentRound + 4 : currentRound + 1;
+        return abi.encode(round_, abi.encode(requestId, bytes("")));
     }
 }

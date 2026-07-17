@@ -65,6 +65,19 @@ contract LuckyDrawRun is Script {
         vm.broadcast(dk);
         circle.requestDraw();
         vm.broadcast(dk);
-        circle.fulfillRandomness(0, uint256(keccak256(abi.encodePacked("ld-rand", r))), "");
+        circle.fulfillRandomness(uint256(keccak256(abi.encodePacked("ld-rand", r))), _vrfPayload(r));
+    }
+
+    /// @notice Rebuild the exact `dataWithRound` payload Gelato echoes back to
+    ///         the consumer: abi.encode(round, abi.encode(requestId, extraData)).
+    ///         Mirrors GelatoVRFConsumerBase's private _round(). The consumer
+    ///         SILENTLY ignores a fulfilment whose hash does not match the one it
+    ///         stored at request time, so the round used here must be the round of
+    ///         the block in which requestDraw() ran.
+    function _vrfPayload(uint256 requestId) internal view returns (bytes memory) {
+        uint256 elapsedFromGenesis = block.timestamp - 1692803367;
+        uint256 currentRound = (elapsedFromGenesis / 3) + 1;
+        uint256 round_ = block.chainid == 1 ? currentRound + 4 : currentRound + 1;
+        return abi.encode(round_, abi.encode(requestId, bytes("")));
     }
 }
