@@ -43,15 +43,23 @@ contract Deploy is Script {
         ReputationRegistry reputation = new ReputationRegistry(futureFactoryAddr);
         console.log("ReputationRegistry:", address(reputation));
 
-        // VRF operator: the keeper EOA authorized to call fulfillRandomness on
-        // every circle this factory creates. Set VRF_OPERATOR in the environment
-        // for any deployment that matters. Falling back to address(0) leaves
-        // circles permissionless — fine for local/demo, NEVER for real value.
+        // VRF operator = Gelato's "dedicated msg.sender" — the only address the
+        // vendored GelatoVRFConsumerBase accepts fulfilments from.
+        //
+        // ORDER MATTERS: fetch this BEFORE deploying. The dedicated msg.sender is
+        // assigned to your DEPLOYER address (not to the deployed contract), so you
+        // read it from https://app.gelato.cloud first, deploy with it set here,
+        // and only then create the VRF task pointing at the deployed contract.
+        // vrfOperator is immutable on the factory — getting this wrong means a
+        // full redeploy.
+        //
+        // address(0) leaves circles permissionless (anyone can fulfil a draw with
+        // randomness of their choosing). Fine for local/demo, NEVER for real value.
         address vrfOperator = vm.envOr("VRF_OPERATOR", address(0));
         if (vrfOperator == address(0)) {
             console.log("WARNING: VRF_OPERATOR unset -> circles will be PERMISSIONLESS (anyone can draw)");
         } else {
-            console.log("VRF operator:", vrfOperator);
+            console.log("VRF operator (Gelato dedicated msg.sender):", vrfOperator);
         }
 
         CircleFactory factory = new CircleFactory(address(circleImpl), address(stable), address(reputation), vrfOperator);
