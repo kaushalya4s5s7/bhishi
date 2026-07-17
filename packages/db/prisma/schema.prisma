@@ -1,0 +1,156 @@
+// Bhishi off-chain index + operational store.
+//
+// IMPORTANT: on-chain is the source of truth. Everything here is a derived,
+// rebuildable cache — if this database is wiped, the indexer worker can fully
+// reconstruct it by replaying getLogs from the factory's deploy block. No
+// business logic may depend on Postgres alone; it exists for read performance
+// and off-chain convenience (waitlist, notifications), never as the arbiter of
+// fund state.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Mirrors Circle.sol's Mode enum (0 = LUCKY_DRAW, 1 = AUCTION).
+enum CircleMode {
+  LUCKY_DRAW
+  AUCTION
+}
+
+/// Mirrors Circle.sol's State enum exactly, including ordinal position.
+/// ACTIVE and PAYOUT are declared on-chain but never assigned (reserved /
+/// payout happens inline) — kept here so ordinal mapping stays 1:1.
+enum CircleState {
+  FILLING
+  ACTIVE
+  ABORTED_FILLING
+  COMMIT
+  REVEAL
+  DRAW
+  PAYOUT
+  COMPLETED
+  STALLED
+}
+
+model Circle {
+  /// Clone address — the on-chain identity, so it's the primary key.
+  address      String      @id
+  factoryTx    String
+  creator      String
+  seats        Int
+  /// Token base units (mUSDC has 6 decimals). Decimal avoids float error.
+  contribution Decimal     @db.Decimal(78, 0)
+  bond         Decimal     @db.Decimal(78, 0)
+  mode         CircleMode
+  state        CircleState @default(FILLING)
+  currentRound Int         @default(0)
+  createdAt    DateTime
+  /// Highest block whose logs are reflected in this row — the indexer's
+  /// per-circle watermark, so a restart resumes instead of re-scanning.
+  lastIndexedBlock BigInt  @default(0)
+
+  members Member[]
+  rounds  Round[]
+  events  ChainEvent[]
+
+  @@index([state])
+  @@index([creator])
+}
+
+model Member {
+  id            String   @id @default(cuid())
+  circle        Circle   @relation(fields: [circleAddress], references: [address], onDelete: Cascade)
+  circleAddress String
+  address       String
+  joinedAt      DateTime
+  hasWon        Boolean  @default(false)
+  /// Set when a member is slashed out; they stay in the row for audit.
+  slashed       Boolean  @default(false)
+
+  @@unique([circleAddress, address])
+  @@index([address])
+}
+
+model Round {
+  id             String    @id @default(cuid())
+  circle         Circle    @relation(fields: [circleAddress], references: [address], onDelete: Cascade)
+  circleAddress  String
+  roundNumber    Int
+  phase          CircleState
+  startedAt      DateTime?
+  /// Deadlines derived from roundStart + COMMIT_WINDOW / REVEAL_WINDOW.
+  commitDeadline DateTime?
+  revealDeadline DateTime?
+  /// Gelato VRF request handle, recorded by the keeper (B4).
+  vrfRequestId    String?
+  drawRequestedAt DateTime?
+  winner          String?
+  /// AUCTION only: winning bid discount, in token base units.
+  winningDiscount Decimal? @db.Decimal(78, 0)
+
+  @@unique([circleAddress, roundNumber])
+  @@index([phase])
+}
+
+/// Append-only audit trail of every Circle event we've observed.
+/// Unique on (txHash, logIndex) so re-indexing is idempotent.
+model ChainEvent {
+  id            String   @id @default(cuid())
+  circle        Circle   @relation(fields: [circleAddress], references: [address], onDelete: Cascade)
+  circleAddress String
+  blockNumber   BigInt
+  txHash        String
+  logIndex      Int
+  eventName     String
+  payload       Json
+  observedAt    DateTime @default(now())
+
+  @@unique([txHash, logIndex])
+  @@index([circleAddress, blockNumber])
+}
+
+/// Early-access intake — replaces the console.log-only Next.js route.
+model WaitlistEntry {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  whatsapp       String?
+  tradition      String?
+  circleSize     Int?
+  trackingMethod String?
+  role           String?
+  wantsTryNow    Boolean  @default(false)
+  /// Wallet address if the submitter was authenticated (Privy).
+  walletAddress  String?
+  createdAt      DateTime @default(now())
+}
+
+/// Delivery audit + dedup/backoff state for the notify worker (B5).
+model NotificationLog {
+  id          String   @id @default(cuid())
+  userAddress String?
+  email       String?
+  channel     String
+  kind        String
+  status      String   @default("queued")
+  jobId       String?
+  error       String?
+  createdAt   DateTime @default(now())
+  sentAt      DateTime?
+
+  @@index([userAddress])
+  @@index([status])
+}
+
+/// Singleton-ish cursor for the factory scan (new CircleCreated events), so the
+/// indexer knows where to resume without rescanning from the deploy block.
+model IndexerCursor {
+  id               String   @id
+  lastIndexedBlock BigInt   @default(0)
+  updatedAt        DateTime @updatedAt
+}
