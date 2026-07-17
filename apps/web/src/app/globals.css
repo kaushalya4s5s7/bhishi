@@ -7,7 +7,10 @@
   --panel: #1f1d22;
   --paper: #faf9f6;
   --brass: #c9a15c;
+  --brass-soft: #f0ead8;
   --graphite: #6b6470;
+  --line: #e6e2d9;
+  --card: #ffffff;
   --background: var(--paper);
   --foreground: var(--ink);
 }
@@ -26,6 +29,32 @@ body {
     font-family: var(--font-display), sans-serif;
   }
 
+  /* Mono eyebrow: the small brass label above headings, from the landing page. */
+  .eyebrow {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--brass);
+  }
+  .eyebrow-muted {
+    color: var(--graphite);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono), ui-monospace, monospace;
+  }
+}
+
+/* Quality floor: a visible, on-brand keyboard focus ring everywhere. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--brass);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
   .ledger-rule {
     background-image: repeating-linear-gradient(
       to right,

@@ -8,10 +8,15 @@ function truncate(addr: string) {
   return addr.slice(0, 6) + '...' + addr.slice(-4);
 }
 
-const LINKS = [
+const GUEST_LINKS = [
   { href: '/#how', label: 'How it works' },
   { href: '/#trust', label: 'Trust' },
   { href: '/demo', label: 'Demo' },
+];
+
+const APP_LINKS = [
+  { href: '/dashboard', label: 'Dashboard' },
+  { href: '/faucet', label: 'Faucet' },
 ];
 
 export function Navbar() {
@@ -20,6 +25,8 @@ export function Navbar() {
   // Show the identity that actually holds funds and joins circles — not the
   // embedded signer behind it (see lib/member.ts).
   const { address } = useMember();
+  // Signed-in users get the app nav; guests get the marketing nav.
+  const LINKS = authenticated ? APP_LINKS : GUEST_LINKS;
 
   return (
     <nav className="sticky top-0 z-[100] w-full bg-[#faf9f6] border-b border-black/10 isolate">
@@ -30,9 +37,9 @@ export function Navbar() {
 
         <div className="hidden md:flex items-center gap-8">
           {LINKS.map(l => (
-            <a key={l.href} href={l.href} className="text-sm text-[#0b0b0e]/60 hover:text-[#0b0b0e] transition">
+            <Link key={l.href} href={l.href} className="text-sm text-[#0b0b0e]/60 hover:text-[#0b0b0e] transition">
               {l.label}
-            </a>
+            </Link>
           ))}
         </div>
 
@@ -81,9 +88,9 @@ export function Navbar() {
       {open && (
         <div className="md:hidden border-t border-black/10 bg-[#faf9f6] px-6 py-5 flex flex-col gap-4">
           {LINKS.map(l => (
-            <a key={l.href} href={l.href} onClick={() => setOpen(false)} className="text-sm text-[#0b0b0e]/60 hover:text-[#0b0b0e] transition">
+            <Link key={l.href} href={l.href} onClick={() => setOpen(false)} className="text-sm text-[#0b0b0e]/60 hover:text-[#0b0b0e] transition">
               {l.label}
-            </a>
+            </Link>
           ))}
           <div className="pt-2 border-t border-black/10">
             {!ready ? null : authenticated ? (

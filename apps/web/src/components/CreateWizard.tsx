@@ -6,6 +6,7 @@ import { formatEther, parseEventLogs } from 'viem';
 import { addresses, circleFactoryAbi } from '@/lib/contracts';
 import { publicClient } from '@/lib/wallet';
 import { useMember } from '@/lib/member';
+import { Button } from '@/components/ui';
 
 interface CreateWizardProps {
   onSuccess?: (addr: string) => void;
@@ -92,66 +93,73 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
     }
   };
 
+  const field = 'w-full px-3 py-2.5 border rounded-sm bg-white text-sm focus:outline-none focus:border-[#c9a15c]';
+
   return (
-    <div className="space-y-6 max-w-md">
+    <div className="space-y-5 max-w-md">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Draw mode</label>
+        <label className="block text-xs font-mono tracking-[0.12em] uppercase text-[#6b6470] mb-2">Draw mode</label>
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={() => setMode(0)}
-            className={`px-3 py-2 rounded-lg border text-sm font-medium transition ${mode === 0 ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-300 text-gray-600'}`}
+            className={`px-3 py-2.5 rounded-sm border text-sm font-medium transition-colors ${mode === 0 ? 'border-[#0b0b0e] bg-[#0b0b0e] text-[#faf9f6]' : 'border-[#e6e2d9] text-[#6b6470] hover:border-[#0b0b0e]'}`}
           >
             Lucky draw
           </button>
           <button
             type="button"
             onClick={() => setMode(1)}
-            className={`px-3 py-2 rounded-lg border text-sm font-medium transition ${mode === 1 ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-300 text-gray-600'}`}
+            className={`px-3 py-2.5 rounded-sm border text-sm font-medium transition-colors ${mode === 1 ? 'border-[#0b0b0e] bg-[#0b0b0e] text-[#faf9f6]' : 'border-[#e6e2d9] text-[#6b6470] hover:border-[#0b0b0e]'}`}
           >
             Auction
           </button>
         </div>
-        <p className="text-xs text-gray-500 mt-1">
-          {mode === 0 ? 'Winner each round is picked at random.' : 'Members bid a discount; highest bidder wins, discount shared as dividend.'}
+        <p className="text-xs text-[#6b6470] mt-2 leading-relaxed">
+          {mode === 0 ? 'A random member is drawn each round via verifiable randomness.' : 'Members bid a discount; the highest bidder wins, and the discount is shared with everyone as a dividend.'}
         </p>
       </div>
+
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Number of seats (2–20)</label>
+        <label className="block text-xs font-mono tracking-[0.12em] uppercase text-[#6b6470] mb-2">Seats (2–20)</label>
         <input type="number" min={2} max={20} value={seats}
           onChange={e => setSeats(Number(e.target.value))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500" />
+          className={`${field} border-[#e6e2d9]`} />
       </div>
+
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">Contribution per round (mUSDC)</label>
+        <label className="block text-xs font-mono tracking-[0.12em] uppercase text-[#6b6470] mb-2">Contribution / round (mUSDC)</label>
         <input type="number" min={1} value={contribution}
           onChange={e => setContribution(Number(e.target.value))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500" />
+          className={`${field} border-[#e6e2d9]`} />
       </div>
+
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Bond (mUSDC) — minimum: {minBond}
+        <label className="block text-xs font-mono tracking-[0.12em] uppercase text-[#6b6470] mb-2">
+          Bond (mUSDC) · min {minBond}
         </label>
         <input type="number" min={minBond} value={bond}
           onChange={e => setBond(Number(e.target.value))}
-          className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 ${bondValid ? 'border-gray-300' : 'border-red-400'}`} />
-        {!bondValid && <p className="text-red-500 text-sm mt-1">Bond must be ≥ (seats−1) × contribution = {minBond}</p>}
+          className={`${field} ${bondValid ? 'border-[#e6e2d9]' : 'border-[#c98a7c]'}`} />
+        {!bondValid && <p className="text-[#9a4a3a] text-xs mt-1.5">Bond must be at least (seats − 1) × contribution = {minBond}</p>}
       </div>
-      {error && <p className="text-red-500 text-sm">{error}</p>}
-      <button onClick={handleCreate} disabled={creating || !bondValid || !seatsValid}
-        className="w-full py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition disabled:opacity-50">
-        {creating ? 'Creating...' : authenticated ? 'Create Circle' : 'Login & Create'}
-      </button>
+
       {vrfQuote !== null && vrfQuote > 0n && (
-        <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-          <span className="font-medium text-gray-700">Randomness funding: {formatEther(vrfQuote)} MON</span>
-          <br />
-          You pre-pay the verifiable-randomness fee for all {seats} draws, so members never
-          need MON to play. Anything unused is refunded to you when the circle completes.
+        <div className="text-xs text-[#6b6470] bg-[#f0ead8]/50 border border-[#e6e2d9] rounded-sm px-3 py-2.5 leading-relaxed">
+          <span className="font-medium text-[#0b0b0e]">Randomness funding · {formatEther(vrfQuote)} MON</span><br />
+          You pre-pay the verifiable-randomness fee for all {seats} draws, so members never need MON to play.
+          Anything unused is refunded to you when the circle completes.
         </div>
       )}
-      <p className="text-xs text-gray-400">
-        You join and stake your bond as a separate step afterward.
+
+      {error && <p className="text-[#9a4a3a] text-sm bg-[#f3e3e0] border border-[#e8cfc9] rounded-sm px-3 py-2.5">{error}</p>}
+
+      <Button onClick={handleCreate} disabled={creating || !bondValid || !seatsValid} full>
+        {creating ? 'Creating…' : authenticated ? 'Create circle' : 'Sign in & create'}
+      </Button>
+
+      <p className="text-xs text-[#6b6470]">
+        Creating is free (just gas). You join and stake your bond as a separate step afterward.
       </p>
     </div>
   );

@@ -5,14 +5,12 @@ import Link from 'next/link';
 import { createPublicClient, http } from 'viem';
 import { monadTestnetChain } from '@/lib/privy';
 import { circleAbi } from '@/lib/contracts';
-import { PhaseBadge } from './PhaseBadge';
+import { Card, PhaseBadge, SeatRing, truncate } from '@/components/ui';
 
 const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
 type StateName = typeof STATE_NAMES[number];
 
-function truncate(addr: string) {
-  return addr.slice(0, 6) + '...' + addr.slice(-4);
-}
+const MODE_LABEL = ['Lucky draw', 'Auction'];
 
 const publicClient = createPublicClient({ chain: monadTestnetChain, transport: http() });
 
@@ -26,6 +24,7 @@ export function CircleCard({ circleAddress, userAddress }: CircleCardProps) {
   const [seats, setSeats] = useState<number>(0);
   const [memberCount, setMemberCount] = useState<number>(0);
   const [contribution, setContribution] = useState<bigint>(0n);
+  const [mode, setMode] = useState<number>(0);
   const [isMember, setIsMember] = useState(false);
   const [hasCommitted, setHasCommitted] = useState(false);
   const [claimable, setClaimable] = useState<bigint>(0n);
@@ -34,16 +33,18 @@ export function CircleCard({ circleAddress, userAddress }: CircleCardProps) {
   useEffect(() => {
     async function load() {
       try {
-        const [stateVal, seatsVal, memberCountVal, contributionVal] = await Promise.all([
+        const [stateVal, seatsVal, memberCountVal, contributionVal, modeVal] = await Promise.all([
           publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
           publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }),
           publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
           publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }),
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'mode' }),
         ]);
         setState(Number(stateVal));
         setSeats(Number(seatsVal));
         setMemberCount(Number(memberCountVal));
         setContribution(BigInt(contributionVal as any));
+        setMode(Number(modeVal));
 
         if (userAddress) {
           const count = Number(memberCountVal);
@@ -72,7 +73,7 @@ export function CircleCard({ circleAddress, userAddress }: CircleCardProps) {
   }, [circleAddress, userAddress]);
 
   if (loading) {
-    return <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 animate-pulse h-40" />;
+    return <div className="rounded-sm border border-[#e6e2d9] bg-white/50 h-44 animate-pulse" />;
   }
 
   const stateName: StateName = state !== null ? (STATE_NAMES[state] ?? 'FILLING') : 'FILLING';
@@ -86,26 +87,35 @@ export function CircleCard({ circleAddress, userAddress }: CircleCardProps) {
   else if (stateName === 'REVEAL' && isMember && hasCommitted) actionLabel = 'Reveal';
   else if ((stateName === 'PAYOUT' || stateName === 'COMPLETED') && claimable > 0n) actionLabel = 'Claim';
 
+  // Pot for the round = seats × contribution (what a winner takes).
+  const pot = (Number(contribution) / 1e6) * seats;
+
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <Link href={`/circle/${circleAddress}`} className="font-mono text-sm text-gray-700 hover:text-purple-600 transition">
-          {truncate(circleAddress)}
-        </Link>
-        <PhaseBadge phase={phaseForBadge as any} />
-      </div>
-      <div className="text-sm text-gray-600">
-        <span className="font-medium">{memberCount} / {seats}</span> seats filled
-      </div>
-      <div className="text-sm text-gray-600">
-        Contribution: <span className="font-medium">{(Number(contribution) / 1e6).toFixed(2)} USDC</span> / round
-      </div>
-      <Link
-        href={actionHref}
-        className="mt-auto bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition text-center"
-      >
-        {actionLabel}
-      </Link>
-    </div>
+    <Link href={actionHref} className="group block">
+      <Card className="p-5 h-full transition-transform group-hover:-translate-y-0.5 group-hover:border-[#0b0b0e]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="font-mono text-xs text-[#6b6470]">{truncate(circleAddress)}</div>
+            <div className="font-display font-semibold text-[26px] mt-1.5 leading-none">
+              {pot.toFixed(2)} <span className="text-[13px] text-[#6b6470] font-sans font-medium">mUSDC pot</span>
+            </div>
+          </div>
+          <PhaseBadge phase={phaseForBadge} />
+        </div>
+
+        <div className="my-4">
+          <SeatRing filled={memberCount} total={seats} />
+        </div>
+
+        <div className="flex items-center justify-between pt-4 border-t border-[#e6e2d9]">
+          <span className="font-mono text-xs text-[#6b6470]">
+            {MODE_LABEL[mode] ?? 'Circle'}
+          </span>
+          <span className={`text-sm font-semibold inline-flex items-center gap-1.5 ${claimable > 0n ? 'text-[#c9a15c]' : 'text-[#0b0b0e]'}`}>
+            {actionLabel} <span aria-hidden>→</span>
+          </span>
+        </div>
+      </Card>
+    </Link>
   );
 }
