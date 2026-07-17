@@ -35,6 +35,22 @@ export interface Member {
   ready: boolean;
   /** Send a contract write as this member. Returns the tx hash. */
   write: (args: { address: `0x${string}`; abi: any; functionName: string; args?: any[]; value?: bigint }) => Promise<`0x${string}`>;
+  /**
+   * The embedded EOA address — the ONE identity that can actually hold and spend
+   * native MON. `undefined` until the wallet resolves. Use it to check MON
+   * balance and to tell the user which address to fund.
+   */
+  eoaAddress?: `0x${string}`;
+  /**
+   * Send a VALUE-BEARING write from the embedded EOA, never the smart account.
+   *
+   * A paymaster sponsors gas only — it cannot supply `msg.value`. So any tx that
+   * attaches native MON (createCircle's VRF pre-funding) MUST come from the EOA,
+   * which can hold MON. This is safe to route separately because createCircle is
+   * NOT a member action: the creator identity is independent of the join/commit/
+   * reveal identity, so it doesn't break the commit-hash single-identity rule.
+   */
+  writeValue: (args: { address: `0x${string}`; abi: any; functionName: string; args?: any[]; value?: bigint }) => Promise<`0x${string}`>;
 }
 
 export function useMember(): Member {
@@ -90,5 +106,23 @@ export function useMember(): Member {
     return hash as `0x${string}`;
   }
 
-  return { address, gasless, ready: privyReady, write };
+  const eoaAddress = embedded?.address as `0x${string}` | undefined;
+
+  // Always the EOA — the only identity that can hold/spend native MON. Used for
+  // value-bearing txs (createCircle) that a paymaster can't sponsor.
+  async function writeValue({
+    address: to,
+    abi,
+    functionName,
+    args = [],
+    value,
+  }: { address: `0x${string}`; abi: any; functionName: string; args?: any[]; value?: bigint }) {
+    if (!eoaAddress) throw new Error('Wallet not ready');
+    const wc = await getWalletClient(embedded, eoaAddress);
+    const hash = await wc.writeContract({ address: to, abi, functionName, args, ...(value !== undefined ? { value } : {}) });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return hash as `0x${string}`;
+  }
+
+  return { address, gasless, ready: privyReady, write, eoaAddress, writeValue };
 }

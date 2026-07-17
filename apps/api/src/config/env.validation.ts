@@ -40,6 +40,24 @@ export class EnvironmentVariables {
   @IsOptional()
   CORS_ORIGINS?: string;
 
+  /** Relayer wallet that sponsors circle-creation funding (native MON top-ups).
+   *  Optional: if unset, the sponsor endpoint is disabled and the app falls back
+   *  to the user funding their own wallet. */
+  @IsString()
+  @IsOptional()
+  RELAYER_PRIVATE_KEY?: string;
+
+  /** Monad RPC the relayer sends through. Defaults to the public testnet RPC. */
+  @IsString()
+  @IsOptional()
+  MONAD_RPC_URL?: string;
+
+  /** Max sponsorship top-ups per user per rolling 24h. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  SPONSOR_DAILY_CAP = 3;
+
   @IsOptional()
   @IsIn(['trace', 'debug', 'info', 'warn', 'error'])
   LOG_LEVEL = 'info';

@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
+import { apiUrl } from '@/lib/api';
 
 const TRADITIONS = [
   'Paluwagan (Filipino)',
@@ -16,7 +17,7 @@ const TRADITIONS = [
 type Status = 'idle' | 'loading' | 'done' | 'error';
 
 export default function EarlyAccessPage() {
-  const { ready, authenticated, login, user } = usePrivy();
+  const { ready, authenticated, login, user, getAccessToken } = usePrivy();
   const router = useRouter();
   const email = user?.email?.address ?? '';
 
@@ -31,12 +32,32 @@ export default function EarlyAccessPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatus('loading');
-    const res = await fetch('/api/waitlist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, whatsapp, tradition, circleSize, trackingMethod, role }),
-    });
-    setStatus(res.ok ? 'done' : 'error');
+    try {
+      // If signed in, attach the Privy token so the API can bind the verified
+      // wallet to the entry (server-side, never from the body). Anonymous is fine
+      // too — the endpoint uses an OptionalPrivyAuthGuard.
+      const token = authenticated ? await getAccessToken().catch(() => null) : null;
+      // Only send whitelisted DTO fields; the API rejects unknown ones. Empty
+      // optionals are dropped so class-validator doesn't choke on ''.
+      const body: Record<string, unknown> = { email, name };
+      if (whatsapp) body.whatsapp = whatsapp;
+      if (tradition) body.tradition = tradition;
+      if (circleSize) body.circleSize = circleSize;
+      if (trackingMethod) body.trackingMethod = trackingMethod;
+      if (role) body.role = role;
+
+      const res = await fetch(apiUrl('/api/waitlist'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      setStatus(res.ok ? 'done' : 'error');
+    } catch {
+      setStatus('error');
+    }
   };
 
   if (!ready) {

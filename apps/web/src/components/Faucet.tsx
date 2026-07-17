@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
+import { usePrivy } from '@privy-io/react-auth';
 import { useMember } from '@/lib/member';
 import { claimFaucet } from '@/lib/faucet';
 import { stableBalance } from '@/lib/erc20';
@@ -10,10 +11,18 @@ import { Button, Card, Eyebrow } from '@/components/ui';
  * `variant="inline"` is a compact balance + claim used in the dashboard strip.
  */
 export function Faucet({ variant = 'card' }: { variant?: 'card' | 'inline' }) {
+  const { authenticated, login, ready: privyReady } = usePrivy();
   const { address, write } = useMember();
   const [balance, setBalance] = useState<bigint | null>(null);
   const [pending, setPending] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  // Authenticated but the embedded/smart wallet is still resolving (useWallets
+  // populates a tick after login). Until an address lands, claim() has nothing to
+  // send from — so the button must be disabled, not a silent no-op that looks
+  // broken. Mirrors the CreateWizard fix.
+  const walletResolving = authenticated && !address;
+  const disabled = pending || !privyReady || walletResolving;
 
   const refresh = useCallback(async () => {
     if (!address) return;
@@ -23,7 +32,14 @@ export function Faucet({ variant = 'card' }: { variant?: 'card' | 'inline' }) {
   useEffect(() => { void refresh(); }, [refresh]);
 
   async function claim() {
-    if (!address) return;
+    // Not signed in → start login and stop; the click after auth claims.
+    if (!authenticated) { await login(); return; }
+    // Signed in but no wallet yet: tell the user instead of silently doing
+    // nothing (the old `if (!address) return` was why the button felt dead).
+    if (!address) {
+      setMsg({ kind: 'err', text: 'Setting up your wallet — one moment, then tap claim again.' });
+      return;
+    }
     setPending(true);
     setMsg(null);
     try {
@@ -49,10 +65,10 @@ export function Faucet({ variant = 'card' }: { variant?: 'card' | 'inline' }) {
         </div>
         <button
           onClick={claim}
-          disabled={pending}
+          disabled={disabled}
           className="mt-1 text-xs text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70 disabled:opacity-40"
         >
-          {pending ? 'Claiming…' : 'Get test funds →'}
+          {pending ? 'Claiming…' : walletResolving ? 'Preparing wallet…' : 'Get test funds →'}
         </button>
         {msg && (
           <p className={`mt-2 text-xs ${msg.kind === 'ok' ? 'text-[#3a6d4a]' : 'text-[#9a4a3a]'}`}>{msg.text}</p>
@@ -77,8 +93,8 @@ export function Faucet({ variant = 'card' }: { variant?: 'card' | 'inline' }) {
             {balanceStr} <span className="text-base text-[#6b6470] font-sans font-medium">mUSDC</span>
           </div>
         </div>
-        <Button variant="brass" onClick={claim} disabled={pending}>
-          {pending ? 'Claiming…' : 'Claim 500 mUSDC'}
+        <Button variant="brass" onClick={claim} disabled={disabled}>
+          {pending ? 'Claiming…' : walletResolving ? 'Preparing wallet…' : 'Claim 500 mUSDC'}
         </Button>
       </div>
 

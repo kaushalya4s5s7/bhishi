@@ -14,11 +14,13 @@ export class CirclesController {
   @Get()
   list(
     @Query('member') member?: string,
+    @Query('mine') mine?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
     return this.circles.list({
       member,
+      mine,
       take: take ? Number(take) : undefined,
       skip: skip ? Number(skip) : undefined,
     });

@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { CirclesModule } from './circles/circles.module';
+import { ProfilesModule } from './profiles/profiles.module';
+import { SponsorModule } from './sponsor/sponsor.module';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { CirclesModule } from './circles/circles.module';
     HealthModule,
     WaitlistModule,
     CirclesModule,
+    ProfilesModule,
+    SponsorModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

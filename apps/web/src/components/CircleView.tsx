@@ -7,6 +7,7 @@ import { useMember } from '@/lib/member';
 import { computeCommitment, secretToSalt, checkRevealWillSucceed } from '@/lib/commitment';
 import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
+import { apiUrl } from '@/lib/api';
 import { AuthGate } from '@/components/AuthGate';
 import { Button, Card, Eyebrow, PhaseBadge, SeatRing, SectionLabel, truncate } from '@/components/ui';
 
@@ -76,20 +77,24 @@ export function CircleView({ circleAddress }: CircleViewProps) {
         setBalance(bal);
       }
 
-      // Load events
+      // Load events from the indexed API (Postgres), NOT via getLogs — Monad's
+      // RPC rejects any log query spanning >100 blocks, so a block-0→latest scan
+      // always fails. The indexer worker keeps ChainEvent in sync.
       try {
-        const logs = await publicClient.getLogs({
-          address: circleAddress,
-          fromBlock: 0n,
-          toBlock: 'latest',
-        });
-        const parsed = logs.slice(-20).map(l => ({
-          name: (l as any).eventName ?? 'Event',
-          args: (l as any).args ?? {},
-          blockNumber: l.blockNumber ?? 0n,
-        }));
-        setEvents(parsed.reverse());
-      } catch { /* ignore */ }
+        const res = await fetch(apiUrl(`/api/circles/${circleAddress}/events?take=20`));
+        if (res.ok) {
+          const data = (await res.json()) as {
+            events: { eventName: string; payload: Record<string, unknown>; blockNumber: string }[];
+          };
+          setEvents(
+            data.events.map(e => ({
+              name: e.eventName ?? 'Event',
+              args: e.payload ?? {},
+              blockNumber: BigInt(e.blockNumber ?? '0'),
+            })),
+          );
+        }
+      } catch { /* ignore — event feed is non-critical */ }
     } catch (e) {
       console.error(e);
     } finally {

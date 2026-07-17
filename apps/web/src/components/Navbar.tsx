@@ -17,6 +17,7 @@ const GUEST_LINKS = [
 const APP_LINKS = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/faucet', label: 'Faucet' },
+  { href: '/profile', label: 'Profile' },
 ];
 
 export function Navbar() {

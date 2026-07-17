@@ -6,6 +6,7 @@ import { formatEther, parseEventLogs } from 'viem';
 import { addresses, circleFactoryAbi } from '@/lib/contracts';
 import { publicClient } from '@/lib/wallet';
 import { useMember } from '@/lib/member';
+import { apiUrl } from '@/lib/api';
 import { Button } from '@/components/ui';
 
 interface CreateWizardProps {
@@ -18,11 +19,20 @@ const toUnits = (n: number) => BigInt(Math.round(n * 1e6));
 type Mode = 0 | 1; // 0 = LUCKY_DRAW, 1 = AUCTION
 
 export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
-  const { authenticated, login } = usePrivy();
-  // The creator identity matters beyond signing: the circle refunds leftover VRF
-  // funding to createCircle's caller, so this must be the address the user
-  // actually controls funds with (see lib/member.ts).
+  const { authenticated, login, ready: privyReady, getAccessToken } = usePrivy();
+  // createCircle attaches native MON (VRF pre-funding), which a paymaster can't
+  // sponsor. So before creating, we ask the backend relayer to top up the user's
+  // smart account with the exact shortfall; the create then runs GASLESS via the
+  // smart account (write), keeping creator = the user's smart account so the
+  // dashboard and VRF refund stay correct. See lib/member.ts + api/sponsor.
   const { address: userAddress, write } = useMember();
+
+  // Authenticated but no address yet = the embedded/smart wallet is still
+  // resolving asynchronously (useWallets populates a tick after login). Until it
+  // lands, createCircle has no `msg.sender` to refund VRF to, so we must NOT let
+  // the user click through — otherwise handleCreate silently re-calls login()
+  // and the button appears dead. See the disabled + label logic below.
+  const walletResolving = authenticated && !userAddress;
 
   const [seats, setSeats] = useState(4);
   const [contribution, setContribution] = useState(100);
@@ -54,7 +64,15 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
   const seatsValid = seats >= 2 && seats <= 20;
 
   const handleCreate = async () => {
-    if (!authenticated || !userAddress) { await login(); return; }
+    // Not signed in at all → start login and stop; the click after auth creates.
+    if (!authenticated) { await login(); return; }
+    // Signed in but the wallet hasn't materialised yet. Calling login() here is a
+    // silent no-op (already authenticated), which is exactly what made the button
+    // look broken. Surface it instead so the user knows to wait a moment.
+    if (!userAddress) {
+      setError('Setting up your wallet — one moment, then tap Create again.');
+      return;
+    }
     if (!seatsValid) { setError('Seats must be between 2 and 20'); return; }
     if (!bondValid) { setError(`Bond must be at least ${minBond} mUSDC`); return; }
     setCreating(true);
@@ -70,6 +88,44 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
         functionName: 'vrfFundingFor',
         args: [BigInt(seats)],
       })) as bigint;
+
+      // A paymaster sponsors gas only, never msg.value — so if the smart account
+      // can't cover the VRF funding, ask the backend relayer to top it up with
+      // the exact shortfall (bound to our verified session; the API only ever
+      // funds our own address). Then the create runs GASLESS from the smart
+      // account, keeping creator = us. If sponsorship is unavailable we surface a
+      // clear "fund your wallet" message rather than a cryptic on-chain revert.
+      const monBalance = await publicClient.getBalance({ address: userAddress });
+      if (monBalance < vrfFunding) {
+        try {
+          const token = await getAccessToken();
+          const res = await fetch(apiUrl('/api/sponsor/create-funding'), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ seats }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body?.message ?? `Sponsorship failed (${res.status})`);
+          }
+          // Wait until the top-up actually lands before we send the create tx.
+          for (let i = 0; i < 30; i++) {
+            const bal = await publicClient.getBalance({ address: userAddress });
+            if (bal >= vrfFunding) break;
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        } catch (sponsorErr: any) {
+          setError(
+            `Couldn't cover the randomness funding automatically (${sponsorErr?.message ?? 'sponsor error'}). ` +
+            `You can send ${formatEther(vrfFunding)} testnet MON to ${userAddress.slice(0, 6)}…${userAddress.slice(-4)} and retry.`,
+          );
+          setCreating(false);
+          return;
+        }
+      }
 
       const hash = await write({
         address: addresses.monadTestnet.factory,
@@ -147,15 +203,31 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
       {vrfQuote !== null && vrfQuote > 0n && (
         <div className="text-xs text-[#6b6470] bg-[#f0ead8]/50 border border-[#e6e2d9] rounded-sm px-3 py-2.5 leading-relaxed">
           <span className="font-medium text-[#0b0b0e]">Randomness funding · {formatEther(vrfQuote)} MON</span><br />
-          You pre-pay the verifiable-randomness fee for all {seats} draws, so members never need MON to play.
+          This funds the verifiable-randomness fee for all {seats} draws, so members never need MON to play.
           Anything unused is refunded to you when the circle completes.
+          <br />
+          <span className="text-[#3a6d4a]">
+            Covered for you — we top up the fee automatically, so creating is free.
+          </span>
         </div>
       )}
 
       {error && <p className="text-[#9a4a3a] text-sm bg-[#f3e3e0] border border-[#e8cfc9] rounded-sm px-3 py-2.5">{error}</p>}
 
-      <Button onClick={handleCreate} disabled={creating || !bondValid || !seatsValid} full>
-        {creating ? 'Creating…' : authenticated ? 'Create circle' : 'Sign in & create'}
+      <Button
+        onClick={handleCreate}
+        disabled={creating || !privyReady || walletResolving || !bondValid || !seatsValid}
+        full
+      >
+        {creating
+          ? 'Creating…'
+          : !privyReady
+            ? 'Loading…'
+            : !authenticated
+              ? 'Sign in & create'
+              : walletResolving
+                ? 'Preparing wallet…'
+                : 'Create circle'}
       </Button>
 
       <p className="text-xs text-[#6b6470]">

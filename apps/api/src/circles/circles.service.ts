@@ -18,12 +18,25 @@ function serialize<T extends Record<string, unknown>>(row: T) {
 export class CirclesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** List circles, newest first. Optionally filter to those a member is in. */
-  async list(params: { member?: string; take?: number; skip?: number }) {
+  /**
+   * List circles, newest first. Filters:
+   *  - `mine`: circles the address is a MEMBER of OR the CREATOR of. This is what
+   *    the dashboard uses, so a just-created circle shows before its bond is
+   *    staked (the join is a separate step).
+   *  - `member`: strictly circles the address has joined (kept for callers that
+   *    want only joined circles).
+   */
+  async list(params: { member?: string; mine?: string; take?: number; skip?: number }) {
     const take = Math.min(params.take ?? 50, 100);
-    const where = params.member
-      ? { members: { some: { address: params.member.toLowerCase() } } }
-      : {};
+    let where = {};
+    if (params.mine) {
+      const addr = params.mine.toLowerCase();
+      where = {
+        OR: [{ members: { some: { address: addr } } }, { creator: addr }],
+      };
+    } else if (params.member) {
+      where = { members: { some: { address: params.member.toLowerCase() } } };
+    }
 
     const [rows, total] = await Promise.all([
       this.prisma.circle.findMany({

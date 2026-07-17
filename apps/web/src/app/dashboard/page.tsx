@@ -1,18 +1,13 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { createPublicClient, http } from 'viem';
-import { monadTestnetChain } from '@/lib/privy';
-import { addresses, circleAbi } from '@/lib/contracts';
 import { CircleCard } from '@/components/CircleCard';
 import { CreateWizard } from '@/components/CreateWizard';
 import { AuthGate } from '@/components/AuthGate';
 import { Faucet } from '@/components/Faucet';
 import { Button, Eyebrow, SectionLabel } from '@/components/ui';
 import { useMember } from '@/lib/member';
+import { apiUrl } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-
-const publicClient = createPublicClient({ chain: monadTestnetChain, transport: http() });
 
 export default function DashboardPage() {
   // Must be the SAME identity that joins/commits, or "my circles" would filter
@@ -28,39 +23,14 @@ export default function DashboardPage() {
     if (!userAddress) return;
     setLoading(true);
     try {
-      const logs = await publicClient.getLogs({
-        address: addresses.monadTestnet.factory,
-        event: {
-          type: 'event',
-          name: 'CircleCreated',
-          inputs: [
-            { type: 'address', name: 'circle', indexed: true },
-            { type: 'address', name: 'creator', indexed: true },
-            { type: 'uint8', name: 'seats', indexed: false },
-            { type: 'uint256', name: 'contribution', indexed: false },
-          ],
-        },
-        fromBlock: 0n,
-        toBlock: 'latest',
-      });
-
-      const circleAddresses = logs.map(l => l.args.circle as `0x${string}`).filter(Boolean);
-
-      const userCircles: `0x${string}`[] = [];
-      await Promise.all(circleAddresses.map(async (addr) => {
-        try {
-          const memberCount = await publicClient.readContract({ address: addr, abi: circleAbi as any, functionName: 'memberCount' });
-          const count = Number(memberCount);
-          for (let i = 0; i < count; i++) {
-            const m = await publicClient.readContract({ address: addr, abi: circleAbi as any, functionName: 'members', args: [i] });
-            if ((m as string).toLowerCase() === userAddress.toLowerCase()) {
-              userCircles.push(addr);
-              break;
-            }
-          }
-        } catch { /* skip */ }
-      }));
-      setCircles(userCircles);
+      // Read the member's circles from the indexed API (Postgres), NOT by
+      // scanning the chain in the browser — Monad's RPC rejects any eth_getLogs
+      // spanning more than 100 blocks, so a block-0→latest scan always fails.
+      // The indexer worker keeps this in sync from chain events.
+      const res = await fetch(apiUrl(`/api/circles?mine=${userAddress.toLowerCase()}`));
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = (await res.json()) as { circles: { address: string }[] };
+      setCircles(data.circles.map(c => c.address as `0x${string}`));
     } catch (e) {
       console.error(e);
     } finally {
@@ -148,7 +118,10 @@ export default function DashboardPage() {
       {/* Create modal */}
       {showCreate && (
         <div
-          className="fixed inset-0 z-50 bg-[#0b0b0e]/60 backdrop-blur-sm flex items-center justify-center p-4"
+          // z-[200] must exceed the Navbar's z-[100] so the backdrop-blur covers
+          // the nav too — otherwise the sticky nav renders above the overlay and
+          // stays sharp while everything else blurs.
+          className="fixed inset-0 z-[200] bg-[#0b0b0e]/60 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={e => { if (e.target === e.currentTarget) setShowCreate(false); }}
         >
           <div className="bg-[#faf9f6] rounded-sm border border-[#e6e2d9] shadow-2xl p-7 w-full max-w-md relative max-h-[90vh] overflow-y-auto">

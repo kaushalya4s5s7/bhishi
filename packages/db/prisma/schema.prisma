@@ -130,6 +130,40 @@ model WaitlistEntry {
   createdAt      DateTime @default(now())
 }
 
+/// Off-chain user profile. Unlike Circle/Member/Round (which are a rebuildable
+/// mirror of chain state), this is genuinely off-chain data with no on-chain
+/// source — display name, avatar, contact prefs. Keyed by the user's wallet
+/// address (lowercased), the same identity used everywhere else in this schema.
+/// Auto-created on first sign-in; editable by the owner via the API.
+model UserProfile {
+  /// Lowercased wallet address — the on-chain identity, so it's the primary key.
+  walletAddress String   @id
+  /// Privy DID, for cross-referencing the auth provider. Unique when present.
+  privyUserId   String?  @unique
+  email         String?
+  displayName   String?
+  avatarUrl     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastSeenAt    DateTime @default(now())
+}
+
+/// Audit trail of relayer-sponsored native-MON top-ups for circle creation.
+/// Used to enforce a per-user daily cap (anti-drain) and to trace where the
+/// relayer's funds went. One row per successful (or attempted) top-up.
+model SponsorGrant {
+  id            String   @id @default(cuid())
+  /// The user's wallet address the top-up was sent to (lowercased).
+  walletAddress String
+  /// Native MON sent, in wei (Decimal to avoid float error).
+  amountWei     Decimal  @db.Decimal(78, 0)
+  txHash        String?
+  status        String   @default("sent")
+  createdAt     DateTime @default(now())
+
+  @@index([walletAddress, createdAt])
+}
+
 /// Delivery audit + dedup/backoff state for the notify worker (B5).
 model NotificationLog {
   id          String   @id @default(cuid())

@@ -17,7 +17,9 @@ export class WaitlistController {
   @UseGuards(OptionalPrivyAuthGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async create(@Body() dto: CreateWaitlistEntryDto, @Req() req: AuthedRequest) {
-    const entry = await this.waitlist.create(dto, req.user?.userId);
+    // Bind the server-verified wallet address (not the request body, and not the
+    // Privy DID) so the notify worker can match on-chain members to their contact.
+    const entry = await this.waitlist.create(dto, req.user?.walletAddress);
     return { ok: true, id: entry.id };
   }
 }
