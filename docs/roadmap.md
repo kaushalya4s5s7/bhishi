@@ -127,10 +127,36 @@ getters silently masked by `.catch`).
 
 ---
 
-## Part 4 — PHASE B: Production off-chain layer
+## Part 4 — PHASE B: Production off-chain layer — ✅ BUILT (2026-07-17)
 
 Follows the `production-architecture.md` design. Each milestone independently shippable; order
 front-loads the pieces the product needs earliest.
+
+**Status: all milestones built and committed.** Everything was verified against *real*
+infrastructure — live Postgres, live Redis, live Monad testnet — not just compiled.
+
+| Milestone | Status | Evidence |
+|---|---|---|
+| B0 VRF hardening | ✅ | operator threaded through factory; unauthorized fulfil reverts (proved on-chain: `0x11314cbe` = `keccak("NotVrfOperator()")`) |
+| B1 `packages/db` | ✅ | migration applied to real Postgres; 7 tables; idempotent `(txHash, logIndex)` proved (same event twice → 1 row) |
+| B2 `apps/api` | ✅ | booted live: `/api/health` 200 w/ real DB probe; waitlist persists; `walletAddress` injection rejected 400 |
+| B3 indexer + indexed reads | ✅ | reconstructed the real deployed circle from chain after a full DB wipe; served via `GET /api/circles` |
+| B4 **Pyth Entropy** (replaced Gelato) | ✅ | circle sponsors the fee from its own balance; 75/75 tests incl. a member-pays-nothing assertion |
+| B5 notify worker | ✅ | messages flowed through live Redis → `NotificationLog` 'sent'; dedupe proved (3 enqueues → 1 row) |
+| B6 CI + infra | ✅ | `docker compose config` valid (5 services); CI covers contracts/web/workers/api |
+
+**Deviations from the original plan, and why:**
+- **B4 is Pyth Entropy, not Gelato.** Gelato's VRF app is deprecated, VRF is absent from its
+  replacement platform, and it gates testnet behind a subscription + a non-refundable Gas Tank.
+  Pyth is verified live on Monad testnet and fits the clone-per-circle model.
+- **No VRF keeper worker exists, by design.** Both Gelato and Pyth are *callback* systems — their
+  own nodes deliver randomness. The plan's "keeper calls the VRF API" step was based on a
+  misreading; there is no such API.
+- **Fee sponsorship was added** (not in the original plan): the circle pre-pays Entropy from its
+  own MON balance so members never spend native tokens.
+
+**Still open (needs the user):** testnet gas to redeploy with Pyth wired in, and the zero-MON
+end-to-end test that proves gasless (see `gasless-plan.md`).
 
 ### Milestone B0 — Contract hardening for real VRF (do first; requires redeploy)
 - Fix **G-C1**: add `vrfOperator` param to `createCircle` → thread through `initialize`.
