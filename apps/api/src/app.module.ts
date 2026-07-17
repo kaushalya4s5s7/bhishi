@@ -10,6 +10,7 @@ import { WaitlistModule } from './waitlist/waitlist.module';
 import { CirclesModule } from './circles/circles.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { SponsorModule } from './sponsor/sponsor.module';
+import { InvitesModule } from './invites/invites.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { SponsorModule } from './sponsor/sponsor.module';
     CirclesModule,
     ProfilesModule,
     SponsorModule,
+    InvitesModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
