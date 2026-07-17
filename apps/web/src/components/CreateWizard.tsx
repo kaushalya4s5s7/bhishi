@@ -8,6 +8,7 @@ import { publicClient } from '@/lib/wallet';
 import { useMember } from '@/lib/member';
 import { apiUrl } from '@/lib/api';
 import { Button } from '@/components/ui';
+import { createInvites, parseEmails } from '@/lib/invites';
 
 interface CreateWizardProps {
   onSuccess?: (addr: string) => void;
@@ -41,6 +42,7 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [vrfQuote, setVrfQuote] = useState<bigint | null>(null);
+  const [inviteEmails, setInviteEmails] = useState('');
 
   // Quote the MON needed to sponsor every draw, so the creator sees the cost
   // before signing rather than being surprised by a value-bearing tx.
@@ -141,6 +143,26 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
       const newAddr = (logs[0] as any)?.args?.circle as string | undefined;
       if (!newAddr) throw new Error('Circle created but address not found in logs');
 
+      // Mint the reusable share link + send any email invites. Best-effort: the
+      // circle already exists on-chain, so a failure here must not block success.
+      // The indexer may not have the Circle row for a beat, so retry briefly —
+      // the creator-only check on the API reads the indexed creator field.
+      try {
+        const token = await getAccessToken();
+        const emails = parseEmails(inviteEmails);
+        for (let i = 0; i < 5; i++) {
+          try {
+            await createInvites(token, newAddr, emails);
+            break;
+          } catch (inviteErr: any) {
+            if (i === 4) throw inviteErr;
+            await new Promise(r => setTimeout(r, 1500));
+          }
+        }
+      } catch (inviteErr) {
+        console.warn('Invite send failed (non-fatal):', inviteErr);
+      }
+
       onSuccess?.(newAddr);
     } catch (e: any) {
       setError(e?.shortMessage ?? e?.message ?? 'Error creating circle');
@@ -198,6 +220,22 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
           onChange={e => setBond(Number(e.target.value))}
           className={`${field} ${bondValid ? 'border-[#e6e2d9]' : 'border-[#c98a7c]'}`} />
         {!bondValid && <p className="text-[#9a4a3a] text-xs mt-1.5">Bond must be at least (seats − 1) × contribution = {minBond}</p>}
+      </div>
+
+      <div>
+        <label className="block text-xs font-mono tracking-[0.12em] uppercase text-[#6b6470] mb-2">
+          Invite by email · optional
+        </label>
+        <textarea
+          value={inviteEmails}
+          onChange={e => setInviteEmails(e.target.value)}
+          placeholder="alice@example.com, bob@example.com"
+          rows={2}
+          className={`${field} border-[#e6e2d9] resize-none`}
+        />
+        <p className="text-xs text-[#6b6470] mt-1.5">
+          They&rsquo;ll get an email with a link to join. You can also copy a shareable link after creating.
+        </p>
       </div>
 
       {vrfQuote !== null && vrfQuote > 0n && (
