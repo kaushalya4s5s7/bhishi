@@ -9,6 +9,7 @@ import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
 import { apiUrl } from '@/lib/api';
 import { AuthGate } from '@/components/AuthGate';
+import { InvitePanel } from '@/components/InvitePanel';
 import { Button, Card, Eyebrow, PhaseBadge, SeatRing, SectionLabel, truncate } from '@/components/ui';
 
 const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
@@ -244,6 +245,8 @@ export function CircleView({ circleAddress }: CircleViewProps) {
           Contribution <span className="font-medium text-[#0b0b0e]">{(Number(contribution) / 1e6).toFixed(2)} mUSDC</span> / round
         </div>
       </Card>
+
+      {stateName === 'FILLING' && <InvitePanel circleAddress={circleAddress} />}
 
       {/* Members */}
       <div>

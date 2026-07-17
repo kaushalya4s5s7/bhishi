@@ -1,0 +1,89 @@
+'use client';
+import { useState } from 'react';
+import { usePrivy } from '@privy-io/react-auth';
+import { createInvites, parseEmails } from '@/lib/invites';
+import { Button, Card, Eyebrow } from '@/components/ui';
+
+interface InvitePanelProps {
+  circleAddress: `0x${string}`;
+}
+
+/**
+ * Creator-facing invite controls on the circle page: copy the reusable link and
+ * send email invites. The reusable link stays valid until the circle's seats
+ * fill (enforced server-side). Non-creators get a 403 from the API — we surface
+ * that softly rather than assuming a role client-side.
+ */
+export function InvitePanel({ circleAddress }: InvitePanelProps) {
+  const { getAccessToken } = usePrivy();
+  const [emails, setEmails] = useState('');
+  const [linkUrl, setLinkUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const shareUrl = (token: string) =>
+    `${window.location.origin}/circle/${circleAddress}?invite=${token}`;
+
+  async function mint() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const token = await getAccessToken();
+      const res = await createInvites(token, circleAddress, parseEmails(emails));
+      const tok = new URL(res.linkUrl).searchParams.get('invite') ?? '';
+      setLinkUrl(shareUrl(tok));
+      const sent = res.invited.length;
+      if (sent > 0) setMsg(`Sent ${sent} email invite${sent === 1 ? '' : 's'}.`);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : undefined;
+      setMsg(message?.includes('403') || /creator/i.test(message ?? '')
+        ? 'Only the circle creator can send invites.'
+        : (message ?? 'Could not create invites.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!linkUrl) return;
+    await navigator.clipboard.writeText(linkUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  const field =
+    'w-full px-3 py-2.5 border border-[#e6e2d9] rounded-sm bg-white text-sm focus:outline-none focus:border-[#c9a15c]';
+
+  return (
+    <Card className="p-5">
+      <Eyebrow muted>Invite</Eyebrow>
+      <p className="text-sm text-[#6b6470] mt-2 mb-4">
+        Share a link with your group, or send email invites. The link works until every seat is filled.
+      </p>
+      <textarea
+        value={emails}
+        onChange={e => setEmails(e.target.value)}
+        placeholder="alice@example.com, bob@example.com (optional)"
+        rows={2}
+        className={`${field} resize-none mb-3`}
+      />
+      <div className="flex gap-2 flex-wrap">
+        <Button onClick={mint} disabled={busy}>
+          {busy ? 'Working…' : linkUrl ? 'Refresh link / send' : 'Create invite link'}
+        </Button>
+        {linkUrl && (
+          <Button variant="ghost" onClick={copy}>
+            {copied ? 'Copied!' : 'Copy link'}
+          </Button>
+        )}
+      </div>
+      {linkUrl && (
+        <p className="text-xs text-[#6b6470] mt-3 break-all font-mono bg-[#f0ead8]/50 border border-[#e6e2d9] rounded-sm px-3 py-2">
+          {linkUrl}
+        </p>
+      )}
+      {msg && <p className="text-xs text-[#6b6470] mt-2">{msg}</p>}
+    </Card>
+  );
+}
