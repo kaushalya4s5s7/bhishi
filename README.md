@@ -26,14 +26,34 @@ pnpm demo   # proves all four shots live on Monad testnet
 
 ## Deployed Contracts (Monad Testnet)
 
-Live on Monad testnet (chain `10143`). Click any address to open it in the explorer.
+Live on Monad testnet (chain `10143`), wired to **real Pyth Entropy** for verifiable
+randomness. Click any address to open it in the explorer.
 
 | Contract | What it does | Address |
 |----------|--------------|---------|
-| **CircleFactory** | Creates new savings circles (one-click clones) | [`0x8D5EB1518fF5530f7a259582f6aFDfd530B3807C`](https://testnet.monadexplorer.com/address/0x8D5EB1518fF5530f7a259582f6aFDfd530B3807C) |
-| **Circle** (implementation) | The circle logic all clones share | [`0xBaB7832e1b507c041c2c1cc6aE9D638320950114`](https://testnet.monadexplorer.com/address/0xBaB7832e1b507c041c2c1cc6aE9D638320950114) |
-| **ReputationRegistry** | Records who paid on time / who defaulted | [`0x4d3d21137cF1aAa678d9e613b35409b342DE491A`](https://testnet.monadexplorer.com/address/0x4d3d21137cF1aAa678d9e613b35409b342DE491A) |
-| **MockStable** (mUSDC) | Test stablecoin with a free faucet | [`0xb6600b753BDFaD238cd4e6Ca652b520F2F1fC38c`](https://testnet.monadexplorer.com/address/0xb6600b753BDFaD238cd4e6Ca652b520F2F1fC38c) |
+| **CircleFactory** | Creates new savings circles (one-click clones) | [`0x384597AE10181bC7215f4a57aF6caAe1a6eE26dc`](https://testnet.monadexplorer.com/address/0x384597AE10181bC7215f4a57aF6caAe1a6eE26dc) |
+| **Circle** (implementation) | The circle logic all clones share | [`0x0785C9d98130791f0f0644a65b39f0a20b2DdA0d`](https://testnet.monadexplorer.com/address/0x0785C9d98130791f0f0644a65b39f0a20b2DdA0d) |
+| **ReputationRegistry** | Records who paid on time / who defaulted | [`0x9d1bA8144DF7cE5A60f3378adBE87A3a97Aa4F02`](https://testnet.monadexplorer.com/address/0x9d1bA8144DF7cE5A60f3378adBE87A3a97Aa4F02) |
+| **MockStable** (mUSDC) | Test stablecoin with a free faucet | [`0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a`](https://testnet.monadexplorer.com/address/0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a) |
+| **Pyth Entropy** (external) | Delivers verifiable drand randomness for every draw | [`0x825c0390f379C631f3Cf11A82a37D20BddF93c07`](https://testnet.monadexplorer.com/address/0x825c0390f379C631f3Cf11A82a37D20BddF93c07) |
+
+### Verifiable randomness — proven on-chain
+
+Every draw is settled by **Pyth Entropy's keeper**, not by us: the circle emits a
+request, Pyth's off-chain nodes fetch a [drand](https://drand.love) random number and
+call back. The circle **sponsors the fee from its own balance** (~0.126 MON/draw), so
+members never spend native tokens. Both modes were run end-to-end against the live
+contracts above:
+
+| Mode | What Pyth did | requestDraw | Pyth fulfilment (winner drawn) |
+|------|---------------|-------------|-------------------------------|
+| **Lucky draw** | Picked the winner at random | [`0x57d01838…`](https://testnet.monadexplorer.com/tx/0x57d018382a640cb3df8de96152434a7b400bc3ac4c8b32e2dc6490305b34fa93) | [`0xe7fea65e…`](https://testnet.monadexplorer.com/tx/0xe7fea65e6701320eeba6ba8e87597acaec936d3f9dc2f050e9202a091c14aee8) |
+| **Auction** | Broke a tie between equal bids | [`0xc845ff78…`](https://testnet.monadexplorer.com/tx/0xc845ff7869c4e09e145ec31c0267dc9e27fc0ff2f33e1b20fa250170e68b8a63) | [`0x9bf9cd19…`](https://testnet.monadexplorer.com/tx/0x9bf9cd19f0f22691c46631cdec4062985328dbef929be9eeeafed685ac59319f) |
+
+In both fulfilment txs the **sender is a Pyth keeper address** (not the deployer) and
+the `to` is Pyth's Entropy contract — the randomness is genuinely external. This is
+"trust the math, not the person" made literal: no human, including the organizer,
+chooses the winner.
 
 ## A Real Auction Circle, Start to Finish (live on-chain)
 

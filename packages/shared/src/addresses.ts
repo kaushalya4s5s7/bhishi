@@ -1,13 +1,16 @@
 // Deployed contract addresses. Edit by hand after each deploy — sync-abi.ts will
 // NOT overwrite this file once it exists.
 //
-// Monad testnet (chain 10143) — redeployed 2026-07-17 with a real vrfOperator
-// wired through the factory (B0), so only the keeper may call fulfillRandomness.
+// Monad testnet (chain 10143) — redeployed 2026-07-17 wired to REAL Pyth Entropy
+// (0x825c0390f379C631f3Cf11A82a37D20BddF93c07) for verifiable drand randomness.
+// Draws are fulfilled by Pyth's keeper; the circle sponsors the fee from its own
+// balance so members never spend native MON.
 export const addresses = {
   monadTestnet: {
-    factory: "0x4FA8F8a91AAB0909a01b63c6F63B7d9815de2570" as `0x${string}`,
-    reputation: "0x17E0C571e8D0288dCC326C08591a7807a4D1F56D" as `0x${string}`,
-    mockStable: "0x3dBaEf18B69E03D093b8C8920118Aa8D3c28048A" as `0x${string}`,
-    circleImpl: "0x4F38e9B52018816394687D608639feeB624E11eB" as `0x${string}`,
+    factory: "0x384597AE10181bC7215f4a57aF6caAe1a6eE26dc" as `0x${string}`,
+    reputation: "0x9d1bA8144DF7cE5A60f3378adBE87A3a97Aa4F02" as `0x${string}`,
+    mockStable: "0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a" as `0x${string}`,
+    circleImpl: "0x0785C9d98130791f0f0644a65b39f0a20b2DdA0d" as `0x${string}`,
+    pythEntropy: "0x825c0390f379C631f3Cf11A82a37D20BddF93c07" as `0x${string}`,
   },
 } as const;
