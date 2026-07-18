@@ -5,7 +5,7 @@
     "buildCommand": "pnpm --filter @bhishi/db generate && pnpm --filter @bhishi/workers build"
   },
   "deploy": {
-    "startCommand": "node dist/indexer.js",
+    "startCommand": "node apps/workers/dist/indexer.js",
     "restartPolicyType": "ON_FAILURE"
   }
 }
