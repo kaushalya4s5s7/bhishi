@@ -11,6 +11,7 @@ import { CirclesModule } from './circles/circles.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { SponsorModule } from './sponsor/sponsor.module';
 import { InvitesModule } from './invites/invites.module';
+import { TransactionsModule } from './transactions/transactions.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { InvitesModule } from './invites/invites.module';
     ProfilesModule,
     SponsorModule,
     InvitesModule,
+    TransactionsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

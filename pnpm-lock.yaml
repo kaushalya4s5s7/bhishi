@@ -20,6 +20,9 @@ importers:
       '@bhishi/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@bhishi/events':
+        specifier: workspace:*
+        version: link:../../packages/events
       '@bhishi/shared':
         specifier: workspace:*
         version: link:../../packages/shared

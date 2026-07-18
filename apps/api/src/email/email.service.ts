@@ -32,7 +32,10 @@ export class EmailService {
     this.from = this.config.get<string>('EMAIL_FROM') ?? 'Bhishi <onboarding@resend.dev>';
   }
 
-  async sendCircleInvite(email: CircleInviteEmail): Promise<void> {
+  /** Returns true only if the email was actually handed to Resend (or logged
+   *  in the no-key fallback) without error — callers use this to report real
+   *  delivery status instead of assuming success just because this resolved. */
+  async sendCircleInvite(email: CircleInviteEmail): Promise<boolean> {
     const subject = 'You’re invited to a Bhishi savings circle';
     const html = this.renderHtml(email);
     const text =
@@ -44,7 +47,13 @@ export class EmailService {
     let errorMsg: string | undefined;
     try {
       if (this.resend) {
-        await this.resend.emails.send({ from: this.from, to: email.to, subject, html, text });
+        // The Resend SDK resolves (never throws) on API-level failures like an
+        // unverified `from` domain or a sandbox restriction — it reports them via
+        // a `{ data, error }` result instead. Ignoring `.error` here previously
+        // meant every invite was recorded (and reported to the caller) as
+        // "sent" even when Resend actually rejected it.
+        const { error } = await this.resend.emails.send({ from: this.from, to: email.to, subject, html, text });
+        if (error) throw new Error(error.message ?? 'Resend rejected the email');
       } else {
         this.logger.log(`[email:fallback] to=${email.to} url=${email.inviteUrl}`);
         // eslint-disable-next-line no-console
@@ -66,6 +75,8 @@ export class EmailService {
         sentAt: status === 'sent' ? new Date() : null,
       },
     });
+
+    return status === 'sent';
   }
 
   private renderHtml(email: CircleInviteEmail): string {

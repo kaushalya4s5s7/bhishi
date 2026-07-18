@@ -60,15 +60,25 @@ export class PrivyService {
       // account (ERC-4337) when one exists, else the embedded EOA. If these
       // disagree, the relayer funds one address while createCircle runs from the
       // other — which is exactly the "topped up but still 0 balance" revert.
+      // Matches @privy-io/react-auth@3.35.1's shape: smart accounts are
+      // `type: 'smart_wallet'`, distinct from the embedded EOA's `type: 'wallet'`.
       const smart = accounts.find((a) => a.type === 'smart_wallet');
       const embedded = accounts.find((a) => a.type === 'wallet');
       const primary = smart ?? embedded;
-      const email = accounts.find((a) => a.type === 'email');
+      // Native email/OTP accounts carry the address in `.address`; OAuth accounts
+      // (Google, etc.) carry it in `.email` instead — prefer the native one.
+      const emailAccount = accounts.find((a) => a.type === 'email');
+      const oauthAccount = accounts.find(
+        (a) => typeof a.email === 'string' && a.type !== 'email',
+      );
+      const email =
+        (typeof emailAccount?.address === 'string' ? emailAccount.address : undefined) ??
+        (typeof oauthAccount?.email === 'string' ? oauthAccount.email : undefined);
       return {
         userId,
         walletAddress:
           typeof primary?.address === 'string' ? primary.address.toLowerCase() : undefined,
-        email: typeof email?.address === 'string' ? email.address : undefined,
+        email,
       };
     } catch (err) {
       this.logger.warn(`getUser failed for ${userId}: ${(err as Error).message}`);

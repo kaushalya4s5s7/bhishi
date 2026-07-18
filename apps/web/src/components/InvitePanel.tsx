@@ -34,7 +34,11 @@ export function InvitePanel({ circleAddress }: InvitePanelProps) {
       const tok = new URL(res.linkUrl).searchParams.get('invite') ?? '';
       setLinkUrl(shareUrl(tok));
       const sent = res.invited.length;
-      if (sent > 0) setMsg(`Sent ${sent} email invite${sent === 1 ? '' : 's'}.`);
+      const failed = res.failed?.length ?? 0;
+      const parts: string[] = [];
+      if (sent > 0) parts.push(`Sent ${sent} email invite${sent === 1 ? '' : 's'}.`);
+      if (failed > 0) parts.push(`Failed to email ${res.failed.join(', ')} — the link still works, share it directly.`);
+      if (parts.length > 0) setMsg(parts.join(' '));
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : undefined;
       setMsg(message?.includes('403') || /creator/i.test(message ?? '')

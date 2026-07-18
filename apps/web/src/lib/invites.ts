@@ -11,6 +11,9 @@ export interface ValidateResult {
 export interface CreateInvitesResult {
   linkUrl: string;
   invited: { email: string; url: string }[];
+  /** Emails whose invite token was minted but the email itself failed to send
+   *  (e.g. provider rejected the sender/recipient) — link still works. */
+  failed: string[];
 }
 
 /** Mint the reusable link + email tokens for a circle. Requires an auth token. */

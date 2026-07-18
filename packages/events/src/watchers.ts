@@ -1,4 +1,5 @@
 import type { PublicClient, Log } from 'viem';
+import { parseEventLogs } from 'viem';
 import { circleAbi } from '@bhishi/shared';
 
 // Mirrors the Circle.sol event set exactly (see packages/shared abis/Circle.json).
@@ -24,14 +25,20 @@ export async function getCircleEvents(
   fromBlock?: bigint,
   toBlock?: bigint | 'latest',
 ): Promise<CircleEvent[]> {
-  // Cast through unknown because circleAbi is typed as Abi (not a const-narrowed tuple),
-  // so viem cannot statically infer the event union. At runtime the ABI is complete.
-  const logs = (await (client.getLogs as Function)({
+  // Fetch raw (undecoded) logs, then decode via parseEventLogs — NOT
+  // getLogs({ abi }), whose auto-decode silently leaves `eventName`/`args`
+  // undefined for logs it fails to match/decode internally (a real viem
+  // quirk: manually calling decodeEventLog on the exact same log succeeds).
+  // That silent failure meant every Circle event (Joined, Committed, etc.)
+  // was indexed with an empty name and args, so nothing ever reached
+  // applyEvent()'s switch — members who joined on-chain never got a Member
+  // row and vanished from "my circles".
+  const rawLogs = await client.getLogs({
     address: circleAddress,
-    abi: circleAbi,
     fromBlock: fromBlock ?? 0n,
     toBlock: toBlock ?? 'latest',
-  })) as AnyLog[];
+  });
+  const logs = parseEventLogs({ abi: circleAbi, logs: rawLogs }) as unknown as AnyLog[];
 
   return logs
     .map((log) => ({

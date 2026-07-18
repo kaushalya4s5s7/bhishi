@@ -7,6 +7,7 @@ import { addresses, circleFactoryAbi } from '@/lib/contracts';
 import { publicClient } from '@/lib/wallet';
 import { useMember } from '@/lib/member';
 import { apiUrl } from '@/lib/api';
+import { confirmTransaction } from '@/lib/transactions';
 import { Button } from '@/components/ui';
 import { createInvites, parseEmails } from '@/lib/invites';
 
@@ -137,6 +138,12 @@ export function CreateWizard({ onSuccess }: CreateWizardProps = {}) {
         value: vrfFunding,
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+      // Fast-path: get the new circle's row into Postgres immediately instead
+      // of waiting for the indexer's next poll — otherwise the creator can
+      // land on /circle/:addr before it's indexed. Best-effort; the indexer
+      // reconciles the authoritative contribution/seats/bond/mode regardless.
+      confirmTransaction(await getAccessToken(), hash, 'createCircle');
 
       // Recover the new clone address from the CircleCreated event.
       const logs = parseEventLogs({ abi: circleFactoryAbi as any, logs: receipt.logs, eventName: 'CircleCreated' });

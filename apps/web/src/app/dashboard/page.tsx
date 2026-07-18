@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { CircleCard } from '@/components/CircleCard';
+import { CircleCard, type CircleSummary } from '@/components/CircleCard';
 import { CreateWizard } from '@/components/CreateWizard';
 import { AuthGate } from '@/components/AuthGate';
 import { Faucet } from '@/components/Faucet';
@@ -15,26 +15,34 @@ export default function DashboardPage() {
   const { address: userAddress } = useMember();
   const router = useRouter();
 
-  const [circles, setCircles] = useState<`0x${string}`[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [circles, setCircles] = useState<CircleSummary[]>([]);
+  // `loaded` = we have completed at least one real fetch for the resolved
+  // wallet. Until then we MUST show the skeleton, never the empty-state:
+  // `loading` starting false + circles=[] would otherwise render "No circles
+  // yet" for a frame before the first fetch even runs (and again while the
+  // wallet address is still resolving). Distinct from `loading` so background
+  // polls don't flip the whole grid back to a skeleton.
+  const [loaded, setLoaded] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
   const fetchCircles = useCallback(async () => {
     if (!userAddress) return;
-    setLoading(true);
     try {
       // Read the member's circles from the indexed API (Postgres), NOT by
       // scanning the chain in the browser — Monad's RPC rejects any eth_getLogs
       // spanning more than 100 blocks, so a block-0→latest scan always fails.
-      // The indexer worker keeps this in sync from chain events.
+      // The indexer worker keeps this in sync from chain events. CircleCard
+      // renders straight off this data — it no longer needs its own on-chain
+      // reads just to display, so a rate-limited RPC can't make an
+      // already-fetched circle look "not there."
       const res = await fetch(apiUrl(`/api/circles?mine=${userAddress.toLowerCase()}`));
       if (!res.ok) throw new Error(`API ${res.status}`);
-      const data = (await res.json()) as { circles: { address: string }[] };
-      setCircles(data.circles.map(c => c.address as `0x${string}`));
+      const data = (await res.json()) as { circles: CircleSummary[] };
+      setCircles(data.circles);
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      setLoaded(true);
     }
   }, [userAddress]);
 
@@ -45,13 +53,13 @@ export default function DashboardPage() {
   }, [fetchCircles]);
 
   return (
-    <main className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
+    <main className="max-w-6xl mx-auto px-6 pt-16 pb-10 sm:pb-14">
       <AuthGate
         title="Sign in to see your circles"
         blurb="View the circles you're in, start a new one, and claim test funds — all from here."
       >
         {/* Header */}
-        <div className="flex items-end justify-between gap-4 flex-wrap">
+        <div className="flex items-end justify-between gap-4 flex-wrap mt-4">
           <div>
             <Eyebrow>Your circles &middot; Monad testnet</Eyebrow>
             <h1 className="font-display font-semibold text-4xl sm:text-5xl leading-none mt-3">Dashboard</h1>
@@ -69,7 +77,7 @@ export default function DashboardPage() {
           </div>
           <div className="p-5 sm:border-r border-b sm:border-b-0 border-[#e6e2d9]">
             <div className="text-xs text-[#6b6470]">In circles</div>
-            <div className="font-display font-semibold text-[28px] mt-1.5">{circles.length}</div>
+            <div className="font-display font-semibold text-[28px] mt-1.5">{loaded ? circles.length : '—'}</div>
           </div>
           <div className="p-5">
             <div className="text-xs text-[#6b6470]">Network</div>
@@ -81,7 +89,7 @@ export default function DashboardPage() {
 
         <SectionLabel>Active</SectionLabel>
 
-        {loading && circles.length === 0 ? (
+        {!loaded ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {[1, 2].map(i => (
               <div key={i} className="h-44 rounded-sm border border-[#e6e2d9] bg-white/50 animate-pulse" />
@@ -99,8 +107,8 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {circles.map(addr => (
-              <CircleCard key={addr} circleAddress={addr} userAddress={userAddress} />
+            {circles.map(circle => (
+              <CircleCard key={circle.address} circle={circle} userAddress={userAddress} />
             ))}
             <button
               onClick={() => setShowCreate(true)}

@@ -27,6 +27,13 @@ import { publicClient, getWalletClient } from './wallet';
  * `useMember()`: one address, one sender, used for join/commit/reveal/claim
  * alike. Do not read `embeddedWallet.address` anywhere else.
  */
+// Monad testnet's eth_estimateGas can under-estimate proxy-clone calls (e.g.
+// createCircle's Clones.clone() + cross-contract initialize()), so txs that hit
+// that path can revert out-of-gas at exactly the estimated limit. Pad every
+// estimate before submitting.
+const GAS_BUFFER_NUM = 13n;
+const GAS_BUFFER_DEN = 10n;
+
 export interface Member {
   /** The member's on-chain identity. Undefined until authenticated. */
   address?: `0x${string}`;
@@ -67,6 +74,11 @@ export function useMember(): Member {
   }
 
   const embedded = wallets.find(w => w.walletClientType === 'privy');
+  // In @privy-io/react-auth@3.35.1 (the version pinned here), a linked smart
+  // account is its own discriminated type: `SmartWalletWithMetadata` with
+  // `type: 'smart_wallet'` (see node_modules/@privy-io/react-auth's
+  // types-*.d.ts). Do not "fix" this to `type === 'wallet'` — that shape is
+  // from a different/newer SDK version and doesn't match what's installed.
   const smartAccount = user?.linkedAccounts?.find((a: any) => a.type === 'smart_wallet') as
     | { address?: string }
     | undefined;
@@ -121,7 +133,16 @@ export function useMember(): Member {
 
     // EOA path: the member pays their own gas.
     const wc = await getWalletClient(embedded, address);
-    const hash = await wc.writeContract({ address: to, abi, functionName, args, ...(value !== undefined ? { value } : {}) });
+    const estimated = await publicClient.estimateContractGas({
+      account: address,
+      address: to,
+      abi,
+      functionName,
+      args,
+      ...(value !== undefined ? { value } : {}),
+    });
+    const gas = (estimated * GAS_BUFFER_NUM) / GAS_BUFFER_DEN;
+    const hash = await wc.writeContract({ address: to, abi, functionName, args, gas, ...(value !== undefined ? { value } : {}) });
     await publicClient.waitForTransactionReceipt({ hash });
     return hash as `0x${string}`;
   }
@@ -139,7 +160,16 @@ export function useMember(): Member {
   }: { address: `0x${string}`; abi: any; functionName: string; args?: any[]; value?: bigint }) {
     if (!eoaAddress) throw new Error('Wallet not ready');
     const wc = await getWalletClient(embedded, eoaAddress);
-    const hash = await wc.writeContract({ address: to, abi, functionName, args, ...(value !== undefined ? { value } : {}) });
+    const estimated = await publicClient.estimateContractGas({
+      account: eoaAddress,
+      address: to,
+      abi,
+      functionName,
+      args,
+      ...(value !== undefined ? { value } : {}),
+    });
+    const gas = (estimated * GAS_BUFFER_NUM) / GAS_BUFFER_DEN;
+    const hash = await wc.writeContract({ address: to, abi, functionName, args, gas, ...(value !== undefined ? { value } : {}) });
     await publicClient.waitForTransactionReceipt({ hash });
     return hash as `0x${string}`;
   }

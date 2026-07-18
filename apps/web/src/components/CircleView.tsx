@@ -9,6 +9,9 @@ import { computeCommitment, secretToSalt, checkRevealWillSucceed } from '@/lib/c
 import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
 import { apiUrl } from '@/lib/api';
+import { fetchCircleDetail } from '@/lib/circle';
+import { confirmTransaction } from '@/lib/transactions';
+import { formatTxError } from '@/lib/txError';
 import { validateInvite, consumeInvite, type ValidateResult } from '@/lib/invites';
 import { fetchProfile, memberLabel, type UserProfile } from '@/lib/profile';
 import { AuthGate } from '@/components/AuthGate';
@@ -20,6 +23,9 @@ type StateName = typeof STATE_NAMES[number];
 
 const INPUT_CLS =
   'w-full border border-[#e6e2d9] rounded-sm px-3 py-2.5 text-sm font-mono bg-white focus:outline-none focus:border-[#c9a15c]';
+
+/** Monad testnet explorer tx link. */
+const txUrl = (hash: string) => `https://testnet.monadexplorer.com/tx/${hash}`;
 
 interface CircleViewProps {
   circleAddress: `0x${string}`;
@@ -40,89 +46,191 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // established a baseline yet" (data hasn't loaded); once set, it's the
   // membership state we most recently observed.
   const wasMemberRef = useRef<boolean | null>(null);
+  // Tracks the last (round, memberCount) pair we already attempted
+  // advanceToReveal() for, so the 10s poll doesn't re-issue the same batch of
+  // `committed()` reads forever once we've already established the answer for
+  // this round — only a NEW round or a newly-joined/committed member can
+  // change the outcome, so re-checking anything else is wasted RPC traffic.
+  const advanceCheckedRef = useRef<string | null>(null);
+  // Same idea, for requestDraw() — keyed only by round, since once requested
+  // for a round, drawRequestedAt itself makes any further call a cheap no-op
+  // via tryRequestDraw's own check (no need to re-derive that from state here).
+  const drawRequestedCheckedRef = useRef<number | null>(null);
 
   const [state, setState] = useState<number | null>(null);
+  const [mode, setMode] = useState<'LUCKY_DRAW' | 'AUCTION'>('LUCKY_DRAW');
   const [seats, setSeats] = useState<number>(0);
   const [members, setMembers] = useState<string[]>([]);
+  // Lowercased addresses that have won ANY past round (from the indexer's
+  // hasWon flag). Used to label a claimable balance correctly: a past winner's
+  // claimable is their pot winnings, not a dividend, even after the round moved on.
+  const [wonMembers, setWonMembers] = useState<Set<string>>(new Set());
   const [profiles, setProfiles] = useState<Record<string, UserProfile | null>>({});
   const [contribution, setContribution] = useState<bigint>(0n);
   const [bond, setBond] = useState<bigint>(0n);
   const [balance, setBalance] = useState<bigint>(0n);
   const [commitOf, setCommitOf] = useState<string>('0x' + '0'.repeat(64));
   const [claimable, setClaimable] = useState<bigint>(0n);
+  const [revealed, setRevealed] = useState(false);
   const [round, setRound] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [txPending, setTxPending] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
   const [secret, setSecret] = useState('');
+  // AUCTION only: the discount (in whole mUSDC) the member bids — how much of
+  // the pot they'll forgo to win it early. Empty in LUCKY_DRAW (unused there).
+  const [bid, setBid] = useState('');
+  // This round's pot (sum of contributions), read live — used to show and
+  // enforce the 40%-of-pot bid cap (Circle.sol MAX_BID_DISCOUNT_BPS = 4000).
+  const [roundPool, setRoundPool] = useState<bigint>(0n);
   const [computedHash, setComputedHash] = useState<string | null>(null);
-  const [events, setEvents] = useState<{ name: string; args: Record<string, any>; blockNumber: bigint }[]>([]);
+  const [events, setEvents] = useState<{ name: string; args: Record<string, any>; blockNumber: bigint; txHash: string }[]>([]);
+  // Optimistic feed entries for the user's OWN just-confirmed actions. The
+  // indexed /events feed lags by up to ~20s (indexer polls the chain every
+  // ~10s, then the UI polls the API every ~10s), so without this the user
+  // wouldn't see their own commit/reveal/claim in "Recent activity" for a
+  // while. Each entry drops itself once the indexed feed contains its txHash.
+  const [pendingEvents, setPendingEvents] = useState<{ name: string; txHash: string }[]>([]);
 
-  const load = useCallback(async () => {
+  function addPendingEvent(name: string, txHash: string) {
+    if (!txHash) return;
+    setPendingEvents(prev =>
+      prev.some(p => p.txHash.toLowerCase() === txHash.toLowerCase()) ? prev : [{ name, txHash }, ...prev],
+    );
+  }
+
+  // ── FAST PATH ──────────────────────────────────────────────────────────
+  // Circle display data from the indexed API (Postgres, ~40ms) instead of 3+
+  // sequential Monad-RPC round-trips (~1.5s each). This is what clears the
+  // skeleton and paints the page. `state`, `round`, `members` etc. come from
+  // the indexer, which stays a beat behind chain — good enough to DISPLAY;
+  // anything a user ACTS on is re-verified live in loadLive() below.
+  const loadFromApi = useCallback(async () => {
     try {
-      const [stateVal, seatsVal, memberCountVal, contributionVal, bondVal, roundVal] = await Promise.all([
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
+      const [detail, eventsRes] = await Promise.all([
+        fetchCircleDetail(circleAddress),
+        fetch(apiUrl(`/api/circles/${circleAddress}/events?take=20`)).then(r => (r.ok ? r.json() : { events: [] })).catch(() => ({ events: [] })),
       ]);
 
-      setState(Number(stateVal));
-      setSeats(Number(seatsVal));
-      setContribution(BigInt(contributionVal as any));
-      setBond(BigInt(bondVal as any));
-      setRound(Number(roundVal));
-
-      const count = Number(memberCountVal);
-      const memberList: string[] = [];
-      for (let i = 0; i < count; i++) {
-        const m = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'members', args: [i] });
-        memberList.push(m as string);
-      }
+      const memberList = detail.members.map(m => m.address);
+      setWonMembers(new Set(detail.members.filter(m => m.hasWon).map(m => m.address.toLowerCase())));
+      const stateIdx = STATE_NAMES.indexOf(detail.state as StateName);
+      setState(stateIdx === -1 ? 0 : stateIdx);
+      setMode(detail.mode);
+      setSeats(detail.seats);
+      setContribution(BigInt(detail.contribution));
+      setBond(BigInt(detail.bond));
+      setRound(detail.currentRound);
       setMembers(memberList);
-
-      if (userAddress) {
-        const ch = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitmentOf', args: [userAddress] }).catch(() => '0x' + '0'.repeat(64));
-        setCommitOf(ch as string);
-        // memberInfo returns (joined, stakedBond, contribution, claimable)
-        const info = await publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [userAddress] }).catch(() => [false, 0n, 0n, 0n]);
-        setClaimable(BigInt((info as any)[3] ?? 0n));
-        const bal = await stableBalance(userAddress).catch(() => 0n);
-        setBalance(bal);
-      }
-
-      // Load events from the indexed API (Postgres), NOT via getLogs — Monad's
-      // RPC rejects any log query spanning >100 blocks, so a block-0→latest scan
-      // always fails. The indexer worker keeps ChainEvent in sync.
-      try {
-        const res = await fetch(apiUrl(`/api/circles/${circleAddress}/events?take=20`));
-        if (res.ok) {
-          const data = (await res.json()) as {
-            events: { eventName: string; payload: Record<string, unknown>; blockNumber: string }[];
-          };
-          setEvents(
-            data.events.map(e => ({
-              name: e.eventName ?? 'Event',
-              args: e.payload ?? {},
-              blockNumber: BigInt(e.blockNumber ?? '0'),
-            })),
-          );
-        }
-      } catch { /* ignore — event feed is non-critical */ }
+      const indexed = (eventsRes.events as { eventName: string; payload: Record<string, unknown>; blockNumber: string; txHash: string }[]).map(e => ({
+        name: e.eventName ?? 'Event',
+        args: e.payload ?? {},
+        blockNumber: BigInt(e.blockNumber ?? '0'),
+        txHash: e.txHash ?? '',
+      }));
+      setEvents(indexed);
+      // Drop any optimistic entry the indexer has now caught up on.
+      const indexedHashes = new Set(indexed.map(e => e.txHash.toLowerCase()));
+      setPendingEvents(prev => prev.filter(p => !indexedHashes.has(p.txHash.toLowerCase())));
     } catch (e) {
+      // If the API can't serve it (e.g. brand-new circle not indexed yet),
+      // loadLive() still fills everything from chain — just a touch slower.
       console.error(e);
     } finally {
       setLoading(false);
     }
+  }, [circleAddress]);
+
+  // ── FRESHNESS PATH ─────────────────────────────────────────────────────
+  // Refresh live from the contract in the background: the fields an action
+  // depends on (a member's own commit/reveal/claim state + wallet balance)
+  // MUST be current, so a button never fires on stale indexer data. Also
+  // re-reads circle state/round/members so a just-changed phase reflects
+  // before the indexer catches up. Non-blocking — the page is already painted
+  // from loadFromApi(), this only corrects/sharpens it.
+  const loadLive = useCallback(async () => {
+    try {
+      const [stateVal, memberCountVal, roundVal, roundPoolVal] = await Promise.all([
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'roundPool' }).catch(() => 0n),
+      ]);
+      setRoundPool(BigInt(roundPoolVal as any));
+
+      const count = Number(memberCountVal);
+      const memberList = (
+        await Promise.all(
+          Array.from({ length: count }, (_, i) =>
+            publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'members', args: [i] }),
+          ),
+        )
+      ) as string[];
+
+      // advanceToReveal() / requestDraw() are permissionless but nothing calls
+      // them automatically — kick them here once per (round, memberCount) /
+      // round so a stuck circle never sits in COMMIT/DRAW forever. See each
+      // helper's doc comment.
+      const advanceCheckKey = `${Number(roundVal)}:${count}`;
+      if (userAddress && Number(stateVal) === STATE_NAMES.indexOf('COMMIT') && advanceCheckedRef.current !== advanceCheckKey) {
+        advanceCheckedRef.current = advanceCheckKey;
+        void tryAdvanceToReveal(memberList);
+      }
+      if (userAddress && Number(stateVal) === STATE_NAMES.indexOf('DRAW') && drawRequestedCheckedRef.current !== Number(roundVal)) {
+        drawRequestedCheckedRef.current = Number(roundVal);
+        void tryRequestDraw();
+      }
+
+      let nextCommitOf: string = '0x' + '0'.repeat(64);
+      let nextClaimable = 0n;
+      let nextBalance = 0n;
+      let nextRevealed = false;
+      if (userAddress) {
+        const [ch, info, bal, hasRevealed] = await Promise.all([
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitmentOf', args: [userAddress] }).catch(() => '0x' + '0'.repeat(64)),
+          // memberInfo returns (joined, stakedBond, contribution, claimable)
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [userAddress] }).catch(() => [false, 0n, 0n, 0n]),
+          stableBalance(userAddress).catch(() => 0n),
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'revealed', args: [userAddress] }).catch(() => false),
+        ]);
+        nextCommitOf = ch as string;
+        nextClaimable = BigInt((info as any)[3] ?? 0n);
+        nextBalance = bal;
+        nextRevealed = Boolean(hasRevealed);
+      }
+
+      // Commit together so the render never mixes a fresh field with a stale one.
+      setState(Number(stateVal));
+      setRound(Number(roundVal));
+      setMembers(memberList);
+      setCommitOf(nextCommitOf);
+      setClaimable(nextClaimable);
+      setBalance(nextBalance);
+      setRevealed(nextRevealed);
+    } catch (e) {
+      console.error(e);
+    }
   }, [circleAddress, userAddress]);
 
+  // After a user's own tx, refresh both paths. loadLive() is what the action
+  // buttons care about (their own commit/reveal/claim state), so it's awaited;
+  // the API refresh runs alongside to catch indexer-derived fields.
+  const refresh = useCallback(async () => {
+    await Promise.all([loadFromApi(), loadLive()]);
+  }, [loadFromApi, loadLive]);
+
   useEffect(() => {
-    load();
-    const interval = setInterval(load, 10000);
+    // Paint instantly from the API, then sharpen from chain — and keep both
+    // fresh on a 10s poll (API is cheap; the live refresh is what guarantees
+    // action state is current).
+    loadFromApi();
+    loadLive();
+    const interval = setInterval(() => {
+      loadFromApi();
+      loadLive();
+    }, 10000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [loadFromApi, loadLive]);
 
   useEffect(() => {
     if (!inviteToken) return;
@@ -181,11 +289,58 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     setTxError(null);
     try {
       await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
-      await load();
+      await refresh();
     } catch (e: any) {
-      setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
+      setTxError(formatTxError(e));
     } finally {
       setTxPending(false);
+    }
+  }
+
+  /**
+   * Check (via one batched multicall — see lib/wallet.ts's batch.multicall)
+   * whether every joined member has now committed, and if so, fire the
+   * permissionless advanceToReveal() so the circle actually enters REVEAL.
+   * Best-effort: if someone else beats us to it, or a read fails, this just
+   * silently no-ops — the circle will simply wait for the next committer (or
+   * a future poll) to try again rather than surface an error to this user.
+   */
+  async function tryAdvanceToReveal(memberList: string[] = members) {
+    try {
+      const committedFlags = await Promise.all(
+        memberList.map(m =>
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'committed', args: [m] }),
+        ),
+      );
+      const allCommitted = committedFlags.every(Boolean);
+      if (!allCommitted) return;
+      await write({ address: circleAddress, abi: circleAbi as any, functionName: 'advanceToReveal', args: [] });
+    } catch {
+      // Someone else likely already advanced it, or the circle isn't ready —
+      // either way, not an error worth surfacing to this user.
+    }
+  }
+
+  /**
+   * requestDraw() is ALSO permissionless, and — same gap as advanceToReveal —
+   * nothing calls it automatically. Without this, a circle that enters DRAW
+   * state has NO path forward at all: requestDraw() is what actually asks
+   * Pyth Entropy for randomness (entropyCallback picks the winner from that),
+   * and reclaimOnStall() (the timeout safety valve) itself requires
+   * drawRequestedAt != 0 before its VRF_TIMEOUT clock can even start. So
+   * skipping this call doesn't just delay the draw — it strands the circle
+   * with no recovery path. Checking drawRequestedAt first avoids a guaranteed
+   * DrawAlreadyRequested() revert once someone else has already called it.
+   */
+  async function tryRequestDraw() {
+    try {
+      const requestedAt = await publicClient.readContract({
+        address: circleAddress, abi: circleAbi as any, functionName: 'drawRequestedAt',
+      });
+      if (BigInt(requestedAt as bigint) !== 0n) return;
+      await write({ address: circleAddress, abi: circleAbi as any, functionName: 'requestDraw', args: [] });
+    } catch {
+      // Someone else likely already requested it — not worth surfacing.
     }
   }
 
@@ -195,10 +350,24 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     setTxError(null);
     try {
       await ensureStableAllowance(write, userAddress!, circleAddress, needed);
-      await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
-      await load();
+      const hash = await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      // Fast-path: tell the backend this confirmed so the dashboard/circle
+      // page reflect it immediately instead of waiting for the indexer's next
+      // poll. Best-effort — the indexer reconciles the same data regardless.
+      if (functionName === 'join' || functionName === 'commit') {
+        confirmTransaction(await getAccessToken(), hash, functionName);
+      }
+      // advanceToReveal() is permissionless but nobody calls it automatically
+      // on-chain — commit() only records the commitment, it never flips the
+      // phase itself. Without this, a circle sits in COMMIT forever once
+      // everyone has committed, waiting for a manual tx that never comes.
+      // Whoever commits last is the natural moment to check and trigger it.
+      if (functionName === 'commit') {
+        await tryAdvanceToReveal();
+      }
+      await refresh();
     } catch (e: any) {
-      setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
+      setTxError(formatTxError(e));
     } finally {
       setTxPending(false);
     }
@@ -211,20 +380,28 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
    */
   async function doReveal() {
     if (!userAddress || !secret) return;
+    // In AUCTION the revealed amount is the bid — it MUST byte-for-byte match
+    // what was committed, so the user re-enters the same bid here.
+    if (mode === 'AUCTION' && !bidValid) {
+      setTxError(`Enter the same bid you committed (0–${maxBidMusdc.toFixed(2)} mUSDC).`);
+      return;
+    }
+    const amount = mode === 'AUCTION' ? bidUnits : contribution;
     setTxPending(true);
     setTxError(null);
     try {
-      const problem = await checkRevealWillSucceed(circleAddress, userAddress, contribution, secret);
+      const problem = await checkRevealWillSucceed(circleAddress, userAddress, amount, secret);
       if (problem) { setTxError(problem); return; }
-      await write({
+      const hash = await write({
         address: circleAddress,
         abi: circleAbi as any,
         functionName: 'reveal',
-        args: [contribution, secretToSalt(secret)],
+        args: [amount, secretToSalt(secret)],
       });
-      await load();
+      confirmTransaction(await getAccessToken(), hash, 'reveal');
+      await refresh();
     } catch (e: any) {
-      setTxError(e?.shortMessage ?? e?.message ?? 'Transaction failed');
+      setTxError(formatTxError(e));
     } finally {
       setTxPending(false);
     }
@@ -235,9 +412,9 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     setTxError(null);
     try {
       await claimFaucet(write, userAddress!);
-      await load();
+      await refresh();
     } catch (e: any) {
-      setTxError(e?.shortMessage ?? e?.message ?? 'Faucet failed');
+      setTxError(formatTxError(e, 'Faucet failed'));
     } finally {
       setTxPending(false);
     }
@@ -245,19 +422,32 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
 
   /**
    * Commit hash MUST match the contract: keccak256(abi.encodePacked(amount, salt, msg.sender)).
-   * For LUCKY_DRAW the revealed amount must equal the contribution, so we commit
-   * to `contribution` as the amount and the user's secret (as bytes32) as the salt.
+   *  • LUCKY_DRAW: the revealed amount must equal `contribution`, so we commit
+   *    to `contribution`.
+   *  • AUCTION: the amount IS the member's bid discount, so we commit to
+   *    `bidUnits`. The member must re-enter the SAME bid + secret at reveal.
    */
   function computeHash() {
     if (!userAddress || !secret) return;
+    if (mode === 'AUCTION' && !bidValid) {
+      setTxError(`Enter a bid between 0 and ${maxBidMusdc.toFixed(2)} mUSDC (max 40% of the pot).`);
+      return;
+    }
     try {
-      setComputedHash(computeCommitment(contribution, secret, userAddress));
+      const amount = mode === 'AUCTION' ? bidUnits : contribution;
+      setComputedHash(computeCommitment(amount, secret, userAddress));
     } catch {
       setTxError('Invalid secret — must be a whole number');
     }
   }
 
-  if (loading) {
+  // Show the skeleton until we have a REAL loaded snapshot (state !== null),
+  // not just until `loading` flips. `loading` alone can desync — e.g. the
+  // wallet address resolving a tick after mount re-runs load() while the
+  // initial zero-state (seats:0, contribution:0n → "0.00 pot") is momentarily
+  // on screen. Gating on `state === null` guarantees the very first frame the
+  // user sees already carries real values, never the zero defaults.
+  if (loading || state === null) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-12 animate-pulse space-y-4">
         <div className="h-8 bg-white/60 border border-[#e6e2d9] rounded-sm w-60" />
@@ -268,9 +458,47 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   }
 
   const stateName: StateName = state !== null ? (STATE_NAMES[state] ?? 'FILLING') : 'FILLING';
+
+  // The most recent WinnerDrawn event overall — shown persistently (even after
+  // a new round has started and `round` has moved on) so the winner is never
+  // just buried in the raw activity feed below.
+  const lastWinnerDrawnEvent = events
+    .filter(ev => ev.name === 'WinnerDrawn')
+    .sort((a, b) => Number(b.blockNumber - a.blockNumber))[0];
+  const lastWinnerRound = lastWinnerDrawnEvent ? Number(lastWinnerDrawnEvent.args.round ?? -1) : -1;
+  const lastWinnerAddress =
+    typeof lastWinnerDrawnEvent?.args.winner === 'string' ? lastWinnerDrawnEvent.args.winner : undefined;
+  const lastWinnerTxHash = lastWinnerDrawnEvent?.txHash;
+  const iAmLastWinner =
+    Boolean(lastWinnerAddress) && userAddress && lastWinnerAddress!.toLowerCase() === userAddress.toLowerCase();
+  // The winner's payout lands in the SAME wallet they play with — claim() does
+  // safeTransfer(msg.sender), and msg.sender is useMember().address. Surface it
+  // so the winner knows exactly which address receives the funds.
+  const myClaimTxHash = events.find(ev => ev.name === 'Claimed' && typeof ev.args.member === 'string' && userAddress && (ev.args.member as string).toLowerCase() === userAddress.toLowerCase())?.txHash;
+
+  // Whether the CURRENT PAYOUT/COMPLETED screen is for the round that winner
+  // belongs to — once a new round starts, this correctly stops applying so we
+  // don't tell someone "you didn't win" about a round that's no longer live.
+  const didNotWinThisRound =
+    Boolean(lastWinnerAddress) &&
+    lastWinnerRound === round &&
+    userAddress &&
+    lastWinnerAddress!.toLowerCase() !== userAddress.toLowerCase();
   const isMember = members.some(m => m.toLowerCase() === userAddress?.toLowerCase());
   const hasCommitted = commitOf !== '0x' + '0'.repeat(64);
   const pot = (Number(contribution) / 1e6) * seats;
+  const isAuction = mode === 'AUCTION';
+
+  // AUCTION bid derivations. The bid (discount) is capped at 40% of THIS
+  // round's live pool (Circle.sol MAX_BID_DISCOUNT_BPS). We validate the typed
+  // bid against that cap so we never send a reveal the contract will reject
+  // with BidExceedsCap. `bidUnits` is the on-chain 6-decimal value; the
+  // `amount` committed/revealed must be identical at commit and reveal.
+  const maxBidUnits = (roundPool * 4000n) / 10000n; // 40% of the pool, in base units
+  const maxBidMusdc = Number(maxBidUnits) / 1e6;
+  const bidNum = bid.trim() === '' ? NaN : Number(bid);
+  const bidUnits = Number.isFinite(bidNum) ? BigInt(Math.round(bidNum * 1e6)) : 0n;
+  const bidValid = Number.isFinite(bidNum) && bidNum >= 0 && bidUnits <= maxBidUnits;
 
   const phaseForBadge = (() => {
     if (stateName === 'ABORTED_FILLING') return 'ABORTED';
@@ -295,13 +523,18 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             : 'This invite link is no longer valid, but you can still view the circle below.'}
         </div>
       )}
-      {inviteState?.valid && (
+      {inviteState?.valid && isMember && (
+        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-sm px-4 py-3">
+          You’re already a member of this circle.
+        </div>
+      )}
+      {inviteState?.valid && !isMember && (
         <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-sm px-4 py-3">
           You’ve been invited to this circle. Join below to claim your seat.
         </div>
       )}
       {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-4">
+      <div className="flex items-start justify-between flex-wrap gap-4 mt-6">
         <div>
           <div className="flex items-center gap-3">
             <Eyebrow>Circle</Eyebrow>
@@ -315,10 +548,51 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             {round > 0 && <span className="font-mono text-xs text-[#6b6470]">Round {round}</span>}
           </div>
         </div>
-        <button onClick={() => load()} className="text-sm text-[#6b6470] hover:text-[#0b0b0e] border border-[#e6e2d9] hover:border-[#0b0b0e] px-3 py-1.5 rounded-sm transition-colors">
+        <button onClick={() => refresh()} className="text-sm text-[#6b6470] hover:text-[#0b0b0e] border border-[#e6e2d9] hover:border-[#0b0b0e] px-3 py-1.5 rounded-sm transition-colors">
           Refresh
         </button>
       </div>
+
+      {/* Last winner — persistent, so it isn't buried once a new round starts */}
+      {lastWinnerAddress && (
+        <div className="text-sm bg-[#f0ead8]/50 border border-[#e6e2d9] rounded-sm px-4 py-3 space-y-1.5">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className="text-[#6b6470]">
+              Round {lastWinnerRound} winner:{' '}
+              <span className="text-[#0b0b0e] font-medium">
+                {memberLabel(profiles[lastWinnerAddress.toLowerCase()], lastWinnerAddress)}
+              </span>
+              {iAmLastWinner && <span className="text-[#c9a15c] font-semibold"> — that&rsquo;s you!</span>}
+            </span>
+            {lastWinnerTxHash && (
+              <a
+                href={txUrl(lastWinnerTxHash)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-xs text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70"
+              >
+                View draw tx ↗
+              </a>
+            )}
+          </div>
+          {iAmLastWinner && (
+            <p className="text-xs text-[#6b6470]">
+              The pot is paid in mUSDC to your wallet{' '}
+              <span className="font-mono text-[#0b0b0e]">{truncate(userAddress!)}</span> — the same address you play with.
+              {myClaimTxHash ? (
+                <>
+                  {' '}Claimed:{' '}
+                  <a href={txUrl(myClaimTxHash)} target="_blank" rel="noopener noreferrer" className="text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70">
+                    view claim tx ↗
+                  </a>
+                </>
+              ) : (
+                <> Use the “Claim balance” action below to pull it in.</>
+              )}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Seats */}
       <Card className="p-5">
@@ -381,6 +655,56 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )}
         </div>
 
+        {/* Claim is available in ANY state whenever there's a claimable
+            balance — the contract's claim() has no phase guard. This lives
+            OUTSIDE the phase ternary below: a winner in a multi-round circle
+            has claimable funds while the circle has already moved on to COMMIT
+            for the next round, so gating claim on PAYOUT/COMPLETED alone would
+            hide it until the whole circle finished.
+
+            IMPORTANT — this is NOT a "you won" prize banner. `claimable` is a
+            single accumulated balance that can hold different things depending
+            on mode/role:
+             • LUCKY_DRAW: only the round winner ever accrues the pot.
+             • AUCTION: EVERY member accrues a dividend each round (their equal
+               share of the winner's bid discount — see Circle.sol's discount
+               split), PLUS the pot if they won. So a non-winner legitimately
+               has a claimable dividend.
+             • Any mode: at circle completion, staked bonds are returned via
+               claimable too.
+            Because it can be a mix, we frame it as "your balance in this
+            circle" rather than mislabeling everyone's as "winnings". */}
+        {claimable > 0n && (() => {
+          const amt = (Number(claimable) / 1e6).toFixed(2);
+          // Fresh "you won" callout only right after this round's draw.
+          const wonThisRound = iAmLastWinner && lastWinnerRound === round;
+          // Have I EVER won a round? Robust across round changes — a past
+          // winner's balance is winnings, not a dividend, even later on.
+          const iHaveWon = Boolean(userAddress && wonMembers.has(userAddress.toLowerCase()));
+          // A dividend is the only source for a member who has never won in an
+          // AUCTION; if they've won, their balance mixes pot + dividends, so we
+          // don't claim it's purely a dividend.
+          const isPureDividend = mode === 'AUCTION' && !iHaveWon;
+          return (
+            <div className="mb-5 bg-[#f0ead8]/60 border border-[#c9a15c]/40 rounded-sm p-4 space-y-2">
+              {wonThisRound && (
+                <p className="text-sm font-semibold text-[#c9a15c]">You won this round&rsquo;s pot.</p>
+              )}
+              <p className="text-sm text-[#6b6470]">
+                Your claimable balance:{' '}
+                <span className="font-display font-semibold text-lg text-[#c9a15c]">{amt} mUSDC</span>
+                {isPureDividend && (
+                  <span className="text-xs"> — your dividend share of the winner&rsquo;s discount</span>
+                )}
+                . Paid to your wallet <span className="font-mono text-xs text-[#0b0b0e]">{truncate(userAddress!)}</span>.
+              </p>
+              <Button variant="brass" onClick={() => doWrite('claim')} disabled={txPending}>
+                {txPending ? 'Claiming…' : 'Claim balance'}
+              </Button>
+            </div>
+          );
+        })()}
+
         {stateName === 'FILLING' ? (
           isMember ? (
             <p className="text-sm text-[#6b6470]">You've joined. Waiting for all seats to fill.</p>
@@ -395,8 +719,30 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
               <p className="text-sm text-[#3a6d4a] font-medium">Committed this round. Wait for the reveal phase.</p>
             ) : (
               <div className="space-y-4">
+                {isAuction && (
+                  <div>
+                    <label className="block text-sm text-[#6b6470] mb-1.5">
+                      Your bid — the discount (mUSDC) you&rsquo;ll give up to win the pot this round.
+                      Highest bidder wins; the discount is split as a dividend to everyone. Max {maxBidMusdc.toFixed(2)} (40% of pot).
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={maxBidMusdc}
+                      value={bid}
+                      onChange={e => { setBid(e.target.value); setComputedHash(null); }}
+                      placeholder={`0 – ${maxBidMusdc.toFixed(2)}`}
+                      className={`${INPUT_CLS} ${bid !== '' && !bidValid ? 'border-[#c98a7c]' : ''}`}
+                    />
+                    {bid !== '' && !bidValid && (
+                      <p className="text-[#9a4a3a] text-xs mt-1.5">Bid must be between 0 and {maxBidMusdc.toFixed(2)} mUSDC.</p>
+                    )}
+                  </div>
+                )}
                 <div>
-                  <label className="block text-sm text-[#6b6470] mb-1.5">Secret number — save it, you'll need it to reveal</label>
+                  <label className="block text-sm text-[#6b6470] mb-1.5">
+                    Secret number — save it{isAuction ? ' along with your bid' : ''}, you&rsquo;ll need {isAuction ? 'both' : 'it'} to reveal
+                  </label>
                   <input
                     type="number"
                     value={secret}
@@ -405,7 +751,7 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                     className={INPUT_CLS}
                   />
                 </div>
-                {secret && (
+                {secret && (!isAuction || bidValid) && (
                   <button onClick={computeHash} className="text-sm text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70">
                     Compute commit hash
                   </button>
@@ -429,21 +775,46 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )
         ) : stateName === 'REVEAL' ? (
           isMember ? (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-[#6b6470] mb-1.5">Your secret number</label>
-                <input
-                  type="number"
-                  value={secret}
-                  onChange={e => setSecret(e.target.value)}
-                  placeholder="Enter the secret you committed"
-                  className={INPUT_CLS}
-                />
+            revealed ? (
+              <p className="text-sm text-[#3a6d4a] font-medium">
+                Already revealed. Waiting for everyone else to reveal, then the draw runs.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {isAuction && (
+                  <div>
+                    <label className="block text-sm text-[#6b6470] mb-1.5">Your bid (the exact discount you committed, in mUSDC)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={maxBidMusdc}
+                      value={bid}
+                      onChange={e => setBid(e.target.value)}
+                      placeholder="Enter the bid you committed"
+                      className={`${INPUT_CLS} ${bid !== '' && !bidValid ? 'border-[#c98a7c]' : ''}`}
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-sm text-[#6b6470] mb-1.5">Your secret number</label>
+                  <input
+                    type="number"
+                    value={secret}
+                    onChange={e => setSecret(e.target.value)}
+                    placeholder="Enter the secret you committed"
+                    className={INPUT_CLS}
+                  />
+                </div>
+                {isAuction && (
+                  <p className="text-xs text-[#6b6470]">
+                    Both the bid and secret must match what you committed, or the reveal fails and your bond can be slashed.
+                  </p>
+                )}
+                <Button onClick={doReveal} disabled={txPending || !secret || (isAuction && !bidValid)}>
+                  {txPending ? 'Revealing…' : 'Reveal'}
+                </Button>
               </div>
-              <Button onClick={doReveal} disabled={txPending || !secret}>
-                {txPending ? 'Revealing…' : 'Reveal'}
-              </Button>
-            </div>
+            )
           ) : (
             <p className="text-sm text-[#6b6470]">You are not a member of this circle.</p>
           )
@@ -453,15 +824,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             <span className="text-sm">Pyth is drawing the winner from verifiable randomness…</span>
           </div>
         ) : stateName === 'PAYOUT' || stateName === 'COMPLETED' ? (
+          // The claim button (if any) is rendered by the always-visible
+          // claimable banner above, so here we only handle the no-balance
+          // messaging.
           claimable > 0n ? (
-            <div className="space-y-3">
-              <p className="text-sm text-[#6b6470]">
-                Claimable <span className="font-display font-semibold text-lg text-[#c9a15c]">{(Number(claimable) / 1e6).toFixed(2)} mUSDC</span>
-              </p>
-              <Button variant="brass" onClick={() => doWrite('claim')} disabled={txPending}>
-                {txPending ? 'Claiming…' : 'Claim payout'}
-              </Button>
-            </div>
+            <p className="text-sm text-[#3a6d4a]">The circle is complete — claim your balance above.</p>
+          ) : didNotWinThisRound ? (
+            <p className="text-sm text-[#6b6470]">
+              You didn&rsquo;t win this round&rsquo;s draw — your bond and future contributions are safe, and you stay in for the next round.
+            </p>
           ) : (
             <p className="text-sm text-[#6b6470]">Nothing to claim right now.</p>
           )
@@ -496,9 +867,20 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           <SectionLabel>Recent activity</SectionLabel>
           <ul className="space-y-1.5">
             {events.map((ev, i) => (
-              <li key={i} className="text-xs text-[#6b6470] font-mono flex gap-3">
+              <li key={i} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
                 <span className="text-[#c9a15c]">[{ev.blockNumber.toString()}]</span>
                 <span>{ev.name}</span>
+                {ev.txHash && (
+                  <a
+                    href={txUrl(ev.txHash)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#6b6470] hover:text-[#c9a15c] transition-colors"
+                    title="View transaction on explorer"
+                  >
+                    ↗
+                  </a>
+                )}
               </li>
             ))}
           </ul>

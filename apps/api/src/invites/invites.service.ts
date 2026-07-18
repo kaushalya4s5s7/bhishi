@@ -65,6 +65,7 @@ export class InvitesService {
     const emails = dto.emails ?? [];
     const uniqueEmails = [...new Set(emails.map(raw => raw.trim().toLowerCase()).filter(Boolean))];
     const invited: { email: string; url: string }[] = [];
+    const failed: string[] = [];
     for (const email of uniqueEmails) {
       const row = await this.prisma.invite.upsert({
         where: { circleAddress_kind_email: { circleAddress, kind: 'EMAIL', email } },
@@ -72,11 +73,15 @@ export class InvitesService {
         create: { token: this.newToken(), circleAddress, kind: 'EMAIL', email, invitedBy: callerAddr },
       });
       const url = this.buildUrl(circleAddress, row.token);
-      await this.email.sendCircleInvite({ to: email, circleAddress, inviteUrl: url, inviter: callerAddr });
-      invited.push({ email, url });
+      // Only report an email as "invited" if it was actually delivered — the
+      // invite token itself is still minted either way, so the link keeps
+      // working even if the email bounced.
+      const sent = await this.email.sendCircleInvite({ to: email, circleAddress, inviteUrl: url, inviter: callerAddr });
+      if (sent) invited.push({ email, url });
+      else failed.push(email);
     }
 
-    return { linkUrl: this.buildUrl(circleAddress, link.token), invited };
+    return { linkUrl: this.buildUrl(circleAddress, link.token), invited, failed };
   }
 
   /**

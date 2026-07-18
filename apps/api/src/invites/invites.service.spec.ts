@@ -42,6 +42,7 @@ describe('InvitesService', () => {
     circleFindUnique.mockResolvedValue({ address: '0xcircle', creator: '0xcreator', seats: 2, state: 'FILLING' });
     memberCount.mockResolvedValue(0);
     inviteUpsert.mockImplementation(({ create }: any) => Promise.resolve({ ...create }));
+    sendCircleInvite.mockResolvedValue(true);
   });
 
   it('rejects a caller who is not the circle creator', async () => {
@@ -73,6 +74,17 @@ describe('InvitesService', () => {
     expect(emailCall.where).toEqual({
       circleAddress_kind_email: { circleAddress: '0xcircle', kind: 'EMAIL', email: 'a@b.com' },
     });
+  });
+
+  it('reports a failed send in `failed`, not `invited`, even though the token is still minted', async () => {
+    sendCircleInvite.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const svc = await make();
+    const res = await svc.createInvites(
+      { circleAddress: '0xCircle', emails: ['ok@b.com', 'bounced@b.com'] },
+      '0xCreator',
+    );
+    expect(res.invited.map(i => i.email)).toEqual(['ok@b.com']);
+    expect(res.failed).toEqual(['bounced@b.com']);
   });
 
   it('reuses an existing LINK instead of minting a second one', async () => {
