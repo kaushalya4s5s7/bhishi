@@ -52,6 +52,10 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^@bhishi/db$": "<rootDir>/../../../packages/db/src/index.ts",
+      "^@bhishi/shared$": "<rootDir>/../../../packages/shared/src/index.ts"
+    }
   }
 }

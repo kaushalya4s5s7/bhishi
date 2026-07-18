@@ -3,11 +3,17 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "generate": "prisma generate",
+    "build": "tsc",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "studio": "prisma studio",
@@ -17,6 +23,7 @@
     "@prisma/client": "^6.2.1"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "prisma": "^6.2.1",
     "typescript": "^5.0.0"
   }

@@ -3,5 +3,5 @@ export {
   getCircleEventsChunked,
   watchCircleEvents,
   DEFAULT_CHUNK_SIZE,
-} from './watchers';
-export type { CircleEvent, CircleEventName } from './watchers';
+} from './watchers.js';
+export type { CircleEvent, CircleEventName } from './watchers.js';

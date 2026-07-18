@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev:indexer": "tsx watch src/indexer.ts",
-    "dev:keeper": "tsx watch src/vrf-keeper.ts",
-    "dev:notify": "tsx watch src/notify.ts",
+    "dev:indexer": "tsx watch --conditions=development src/indexer.ts",
+    "dev:keeper": "tsx watch --conditions=development src/vrf-keeper.ts",
+    "dev:notify": "tsx watch --conditions=development src/notify.ts",
     "start:indexer": "node dist/indexer.js",
     "start:keeper": "node dist/vrf-keeper.js",
     "start:notify": "node dist/notify.js",
