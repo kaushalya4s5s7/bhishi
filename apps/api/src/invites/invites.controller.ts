@@ -21,6 +21,7 @@ export class InvitesController {
 
   /** Public: resolve a token so the frontend gate knows where to route. */
   @Get(':token')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   validate(@Param('token') token: string) {
     return this.invites.validate(token);
   }
