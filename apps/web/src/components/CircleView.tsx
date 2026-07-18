@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { circleAbi } from '@/lib/contracts';
 import { publicClient } from '@/lib/wallet';
@@ -32,6 +32,13 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   const { getAccessToken } = usePrivy();
   const [inviteState, setInviteState] = useState<ValidateResult | null>(null);
   const [consumed, setConsumed] = useState(false);
+  // Tracks whether we've observed a genuine "not a member" -> "member" transition
+  // during THIS session, as opposed to the user simply already being a member on
+  // the very first load (e.g. opening their own reusable invite link, or a
+  // forwarded invite after joining some other way). `null` means "we haven't
+  // established a baseline yet" (data hasn't loaded); once set, it's the
+  // membership state we most recently observed.
+  const wasMemberRef = useRef<boolean | null>(null);
 
   const [state, setState] = useState<number | null>(null);
   const [seats, setSeats] = useState<number>(0);
@@ -123,12 +130,34 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   }, [inviteToken]);
 
   useEffect(() => {
-    if (!inviteToken || consumed) return;
-    const joined = members.some(m => m.toLowerCase() === userAddress?.toLowerCase());
-    if (!joined) return;
+    // Wait until we actually have loaded member data and know the user's address —
+    // an empty `members` array pre-load must never be mistaken for "not a member".
+    if (loading || !userAddress) return;
+    const isMemberNow = members.some(m => m.toLowerCase() === userAddress.toLowerCase());
+
+    if (wasMemberRef.current === null) {
+      // First observation after data has loaded: this establishes the baseline,
+      // it is NOT a transition. If they're already a member on first look (own
+      // reusable link, forwarded invite after joining elsewhere, etc.), we must
+      // not attribute that as a fresh join.
+      wasMemberRef.current = isMemberNow;
+      return;
+    }
+
+    const justJoined = !wasMemberRef.current && isMemberNow;
+    wasMemberRef.current = isMemberNow;
+
+    if (!inviteToken || consumed || !justJoined) return;
+    // Best-effort attribution only: consumeInvite (lib/invites.ts) intentionally
+    // swallows all errors and never rejects, so there is no success/failure signal
+    // to react to here. Given consume is explicitly non-critical (it only affects
+    // who gets attribution credit for an invite, never the on-chain join itself),
+    // a single fire-and-forget attempt is the pragmatic choice — building a retry
+    // system around a best-effort side channel would be over-engineering. We mark
+    // `consumed` immediately so we don't refire on every subsequent render.
     setConsumed(true);
     getAccessToken().then(t => consumeInvite(t, inviteToken));
-  }, [inviteToken, consumed, members, userAddress, getAccessToken]);
+  }, [inviteToken, consumed, members, userAddress, loading, getAccessToken]);
 
   async function doWrite(functionName: string, args: any[] = []) {
     setTxPending(true);
