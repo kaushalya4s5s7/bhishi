@@ -284,11 +284,19 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     };
   }, [members, profiles]);
 
+  // Map a function we call to the event name it emits, so an optimistic feed
+  // entry reads like the real indexed one.
+  const EVENT_FOR_FN: Record<string, string> = {
+    claim: 'Claimed', join: 'Joined', commit: 'Committed', reveal: 'Revealed',
+    reclaimOnStall: 'Stalled', refundFilling: 'FillingRefunded',
+  };
+
   async function doWrite(functionName: string, args: any[] = []) {
     setTxPending(true);
     setTxError(null);
     try {
-      await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      const hash = await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      addPendingEvent(EVENT_FOR_FN[functionName] ?? functionName, hash);
       await refresh();
     } catch (e: any) {
       setTxError(formatTxError(e));
@@ -351,6 +359,7 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     try {
       await ensureStableAllowance(write, userAddress!, circleAddress, needed);
       const hash = await write({ address: circleAddress, abi: circleAbi as any, functionName, args });
+      addPendingEvent(EVENT_FOR_FN[functionName] ?? functionName, hash);
       // Fast-path: tell the backend this confirmed so the dashboard/circle
       // page reflect it immediately instead of waiting for the indexer's next
       // poll. Best-effort — the indexer reconciles the same data regardless.
@@ -398,6 +407,7 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         functionName: 'reveal',
         args: [amount, secretToSalt(secret)],
       });
+      addPendingEvent('Revealed', hash);
       confirmTransaction(await getAccessToken(), hash, 'reveal');
       await refresh();
     } catch (e: any) {
@@ -862,12 +872,24 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       </Card>
 
       {/* Event feed */}
-      {events.length > 0 && (
+      {(events.length > 0 || pendingEvents.length > 0) && (
         <div>
           <SectionLabel>Recent activity</SectionLabel>
           <ul className="space-y-1.5">
+            {/* Optimistic entries for the user's own just-confirmed actions,
+                shown instantly while the indexer catches up (up to ~20s). */}
+            {pendingEvents.map(ev => (
+              <li key={ev.txHash} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
+                <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-[#c9a15c] border-t-transparent animate-spin" />
+                <span>{ev.name}</span>
+                <span className="text-[10px] uppercase tracking-wider text-[#c9a15c]/70">syncing…</span>
+                {ev.txHash && (
+                  <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors" title="View transaction on explorer">↗</a>
+                )}
+              </li>
+            ))}
             {events.map((ev, i) => (
-              <li key={i} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
+              <li key={ev.txHash || i} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
                 <span className="text-[#c9a15c]">[{ev.blockNumber.toString()}]</span>
                 <span>{ev.name}</span>
                 {ev.txHash && (
