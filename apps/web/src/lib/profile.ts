@@ -15,6 +15,26 @@ export interface UserProfile {
   lastSeenAt: string;
 }
 
+/** Public, unauthenticated lookup of any address's profile. Returns null if the
+ *  address has no profile row yet (never signed in) or on any fetch error. */
+export async function fetchProfile(address: string): Promise<UserProfile | null> {
+  try {
+    const res = await fetch(apiUrl(`/api/profiles/${address}`));
+    if (!res.ok) return null;
+    return (await res.json()) as UserProfile;
+  } catch {
+    return null;
+  }
+}
+
+/** Best display label for a member: their displayName, else their email, else
+ *  a truncated address. Never blank. */
+export function memberLabel(profile: UserProfile | null | undefined, address: string): string {
+  if (profile?.displayName) return profile.displayName;
+  if (profile?.email) return profile.email;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
 /**
  * Auto-provisions the signed-in user's off-chain profile and exposes it for
  * reading/editing. On sign-in (once a wallet address exists) it POSTs

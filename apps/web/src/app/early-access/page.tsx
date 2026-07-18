@@ -14,7 +14,7 @@ const TRADITIONS = [
   'Other / our own tradition',
 ];
 
-type Status = 'idle' | 'loading' | 'done' | 'error';
+type Status = 'idle' | 'loading' | 'done' | 'dismissed' | 'error';
 
 export default function EarlyAccessPage() {
   const { ready, authenticated, login, user, getAccessToken } = usePrivy();
@@ -111,12 +111,30 @@ export default function EarlyAccessPage() {
             </button>
             <button
               type="button"
-              onClick={() => setStatus('idle')}
+              onClick={() => setStatus('dismissed')}
               className="border border-black/15 text-[#0b0b0e] font-semibold px-8 py-3.5 hover:bg-black/5 transition"
             >
               No thanks
             </button>
           </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (status === 'dismissed') {
+    return (
+      <main className="min-h-[70vh] flex items-center justify-center bg-[#faf9f6] px-6">
+        <div className="max-w-sm text-center">
+          <span className="inline-flex items-center gap-2 bg-[#e6efe8] border border-[#cfe0d3] text-[#3a6d4a] text-xs font-semibold uppercase tracking-[0.1em] px-3 py-1.5 mb-5">
+            ✓ You&apos;re on the list
+          </span>
+          <h1 className="font-display font-semibold text-2xl text-[#0b0b0e] mb-3">
+            All set — see you soon
+          </h1>
+          <p className="text-[#6b6470]">
+            We&apos;ll reach out on WhatsApp when a circle matching yours opens.
+          </p>
         </div>
       </main>
     );

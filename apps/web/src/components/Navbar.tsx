@@ -30,7 +30,12 @@ export function Navbar() {
   const LINKS = authenticated ? APP_LINKS : GUEST_LINKS;
 
   return (
-    <nav className="sticky top-0 z-[100] w-full bg-[#faf9f6] border-b border-black/10 isolate">
+    <nav className="absolute top-0 z-[100] w-full bg-[#faf9f6] border-b border-black/30 isolate">
+      {/* Vertical rails aligned to the hero image's left/right edges (mx-4 sm:mx-6).
+          They continue straight down into the hero so navbar + image share one
+          continuous vertical boundary. */}
+      <div className="pointer-events-none absolute inset-y-0 left-4 sm:left-6 w-px bg-black/30" />
+      <div className="pointer-events-none absolute inset-y-0 right-4 sm:right-6 w-px bg-black/30" />
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <Link href="/" className="font-display font-semibold text-base tracking-[0.08em] uppercase text-[#0b0b0e]">
           Bhishi<span className="text-[#c9a15c]">.</span>

@@ -4,6 +4,7 @@ import { StickySteps } from '@/components/StickySteps';
 import { Marquee } from '@/components/Marquee';
 import { Reveal } from '@/components/Reveal';
 import { HeroCTAs } from '@/components/HeroCTAs';
+import { SmoothScroll } from '@/components/SmoothScroll';
 
 const TRUST_ITEMS = [
   { label: 'Non-custodial' },
@@ -16,10 +17,16 @@ const TRUST_ITEMS = [
 
 export default function LandingPage() {
   return (
-    <main className="bg-[#faf9f6]">
+    <main className="relative bg-[#faf9f6]">
+      <SmoothScroll />
+      {/* Continuous vertical rails running the full height of the landing page,
+          aligned to the mx-4 sm:mx-6 inset. The navbar carries matching rails at
+          the same inset so the boundary is unbroken from the very top to the end. */}
+      <div className="pointer-events-none absolute inset-y-0 left-4 sm:left-6 z-40 w-px bg-black/20" />
+      <div className="pointer-events-none absolute inset-y-0 right-4 sm:right-6 z-40 w-px bg-black/20" />
       {/* Hero */}
-      <section className="bg-[#faf9f6]">
-        <div className="relative h-[60vh] min-h-[400px] sm:h-[63vh] sm:min-h-[400px] mx-4 sm:mx-6   overflow-hidden">
+      <section className="relative bg-[#faf9f6]">
+        <div className="relative h-[60vh] min-h-[400px] sm:h-[63vh] sm:min-h-[400px] mx-4 sm:mx-6 overflow-hidden">
           <Image
             src="/image1.png"
             alt="A family gathers around a table, contributing coins to a shared savings pot."

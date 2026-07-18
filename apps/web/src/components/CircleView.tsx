@@ -10,6 +10,7 @@ import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
 import { apiUrl } from '@/lib/api';
 import { validateInvite, consumeInvite, type ValidateResult } from '@/lib/invites';
+import { fetchProfile, memberLabel, type UserProfile } from '@/lib/profile';
 import { AuthGate } from '@/components/AuthGate';
 import { InvitePanel } from '@/components/InvitePanel';
 import { Button, Card, Eyebrow, PhaseBadge, SeatRing, SectionLabel, truncate } from '@/components/ui';
@@ -43,6 +44,7 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   const [state, setState] = useState<number | null>(null);
   const [seats, setSeats] = useState<number>(0);
   const [members, setMembers] = useState<string[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, UserProfile | null>>({});
   const [contribution, setContribution] = useState<bigint>(0n);
   const [bond, setBond] = useState<bigint>(0n);
   const [balance, setBalance] = useState<bigint>(0n);
@@ -158,6 +160,21 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     setConsumed(true);
     getAccessToken().then(t => consumeInvite(t, inviteToken));
   }, [inviteToken, consumed, members, userAddress, loading, getAccessToken]);
+
+  // Resolve each member's display name/email for the member list, so it never
+  // just shows a raw address. Fetches only addresses not already in `profiles`.
+  useEffect(() => {
+    const missing = members.filter(m => !(m.toLowerCase() in profiles));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    Promise.all(missing.map(async m => [m.toLowerCase(), await fetchProfile(m)] as const)).then(entries => {
+      if (cancelled) return;
+      setProfiles(prev => ({ ...prev, ...Object.fromEntries(entries) }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [members, profiles]);
 
   async function doWrite(functionName: string, args: any[] = []) {
     setTxPending(true);
@@ -328,7 +345,7 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
               const isYou = m.toLowerCase() === userAddress?.toLowerCase();
               return (
                 <li key={i} className="flex items-center justify-between text-sm border border-[#e6e2d9] rounded-sm px-3 py-2.5 bg-white">
-                  <span className="font-mono text-[#0b0b0e]">{truncate(m)}</span>
+                  <span className="text-[#0b0b0e]">{memberLabel(profiles[m.toLowerCase()], m)}</span>
                   <div className="flex gap-2 items-center">
                     {isYou && <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-sm">You</span>}
                     {stateName === 'COMMIT' && isYou && (

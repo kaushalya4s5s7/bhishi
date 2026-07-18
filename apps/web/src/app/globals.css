@@ -15,6 +15,10 @@
   --foreground: var(--ink);
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   color: var(--foreground);
   background: var(--background);
@@ -84,5 +88,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .animate-marquee {
     animation: none;
+  }
+
+  html {
+    scroll-behavior: auto;
   }
 }

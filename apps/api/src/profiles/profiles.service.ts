@@ -12,6 +12,14 @@ export class ProfilesService {
    * Idempotent auto-provision on sign-in. Creates the profile the first time,
    * and on every call bumps lastSeenAt and back-fills email/privyUserId if Privy
    * now has them. Never overwrites a user-set displayName/avatar.
+   *
+   * `useMember()` (web) can resolve a DIFFERENT on-chain address for the same
+   * Privy user over time — e.g. the embedded EOA before the smart account
+   * finishes linking, then the smart account afterward. `privyUserId` is
+   * globally unique, so upserting keyed only on `walletAddress` would try to
+   * INSERT a second row with an already-claimed `privyUserId` and hit
+   * P2002. Look up by `privyUserId` first and move that same row to the new
+   * address instead of colliding.
    */
   async ensure(user: VerifiedUser) {
     if (!user.walletAddress) {
@@ -20,6 +28,35 @@ export class ProfilesService {
       throw new BadRequestException('No wallet linked to this account yet');
     }
     const walletAddress = user.walletAddress.toLowerCase();
+
+    const existingByPrivyId = await this.prisma.userProfile.findUnique({
+      where: { privyUserId: user.userId },
+    });
+    if (existingByPrivyId && existingByPrivyId.walletAddress !== walletAddress) {
+      // Moving `walletAddress` (the @id) means this could still collide if the
+      // new address already has its own row (e.g. from a previous session on a
+      // different account) — extremely unlikely, but don't 500 on it: keep
+      // serving the existing row rather than losing displayName/avatar.
+      const collision = await this.prisma.userProfile.findUnique({ where: { walletAddress } });
+      if (!collision) {
+        return this.prisma.userProfile.update({
+          where: { privyUserId: user.userId },
+          data: {
+            walletAddress,
+            lastSeenAt: new Date(),
+            ...(user.email ? { email: user.email } : {}),
+          },
+        });
+      }
+      return this.prisma.userProfile.update({
+        where: { walletAddress },
+        data: {
+          lastSeenAt: new Date(),
+          privyUserId: user.userId,
+          ...(user.email ? { email: user.email } : {}),
+        },
+      });
+    }
 
     return this.prisma.userProfile.upsert({
       where: { walletAddress },
