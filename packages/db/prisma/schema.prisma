@@ -238,3 +238,22 @@ model IndexerCursor {
   lastIndexedBlock BigInt   @default(0)
   updatedAt        DateTime @updatedAt
 }
+
+/// A browser's Web Push subscription, tied to the user's wallet so the notify
+/// worker can push round-deadline reminders to the device. One row per
+/// (wallet, endpoint) — a user with two devices has two rows. Best-effort:
+/// a missing/expired subscription is pruned on the first 404/410 from the
+/// push service, never treated as an error.
+model PushSubscription {
+  id            String   @id @default(cuid())
+  /// Lowercased wallet address (same identity used everywhere else).
+  walletAddress String
+  /// The push service endpoint URL — globally unique per subscription.
+  endpoint      String   @unique
+  /// VAPID keys the browser handed us for encrypting the payload.
+  p256dh        String
+  auth          String
+  createdAt     DateTime @default(now())
+
+  @@index([walletAddress])
+}

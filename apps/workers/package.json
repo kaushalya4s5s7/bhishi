@@ -21,10 +21,12 @@
     "bullmq": "^5.34.6",
     "ioredis": "^5.4.2",
     "pino": "^9.6.0",
-    "viem": "^2.55.2"
+    "viem": "^2.55.2",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",
     "vitest": "^2.1.8"

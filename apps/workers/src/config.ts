@@ -17,6 +17,9 @@ export const config = {
   /** Block to start indexing from — the factory's deploy block. */
   startBlock: BigInt(process.env.START_BLOCK ?? '0'),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 10_000),
+  vapidPublic: process.env.WEB_PUSH_VAPID_PUBLIC_KEY ?? '',
+  vapidPrivate: process.env.WEB_PUSH_VAPID_PRIVATE_KEY ?? '',
+  vapidSubject: process.env.WEB_PUSH_SUBJECT ?? 'mailto:hello@bhishi.app',
   required,
 };
 

@@ -1,4 +1,6 @@
-import { logger } from '../config.js';
+import webpush from 'web-push';
+import { prisma } from '@bhishi/db';
+import { logger, config } from '../config.js';
 
 export interface SendResult {
   ok: boolean;
@@ -123,6 +125,54 @@ class TwilioWhatsAppProvider implements NotifyProvider {
 }
 
 /**
+ * Web Push, routed by wallet address rather than by device — `to` is the
+ * lowercased wallet (same routing key as email/WhatsApp today), and the
+ * provider fans out to every `PushSubscription` row for that wallet. A dead
+ * subscription (404/410 from the push service) is pruned so we stop paying
+ * for retries against it; that's not treated as an overall send failure as
+ * long as at least one other subscription for the wallet succeeded.
+ */
+/** Exported so callers (e.g. the notify dispatch loop) can detect this
+ *  specific, permanent failure mode without string-matching independently. */
+export const NO_PUSH_SUBSCRIPTION_ERROR = 'no push subscription for wallet';
+
+class WebPushProvider implements NotifyProvider {
+  readonly name = 'webpush';
+  constructor() {
+    webpush.setVapidDetails(config.vapidSubject, config.vapidPublic, config.vapidPrivate);
+  }
+
+  async send(to: string, subject: string, body: string): Promise<SendResult> {
+    const subs = await prisma.pushSubscription.findMany({ where: { walletAddress: to.toLowerCase() } });
+    if (subs.length === 0) return { ok: false, error: NO_PUSH_SUBSCRIPTION_ERROR };
+
+    const payload = JSON.stringify({ title: subject, body, url: '/dashboard' });
+    let anyOk = false;
+    const errors: string[] = [];
+    for (const s of subs) {
+      try {
+        await webpush.sendNotification(
+          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+          payload,
+        );
+        anyOk = true;
+      } catch (e: unknown) {
+        const status = typeof e === 'object' && e !== null && 'statusCode' in e ? (e as { statusCode?: number }).statusCode : undefined;
+        // 404/410 = subscription gone; prune it so we stop trying.
+        if (status === 404 || status === 410) {
+          await prisma.pushSubscription.deleteMany({ where: { endpoint: s.endpoint } });
+        } else {
+          const message = e instanceof Error ? e.message : String(e);
+          logger.warn({ provider: this.name, to, endpoint: s.endpoint, status, message }, 'push send failed');
+          errors.push(status ? `${status}: ${message}` : message);
+        }
+      }
+    }
+    return anyOk ? { ok: true } : { ok: false, error: errors.join('; ') || 'all push sends failed' };
+  }
+}
+
+/**
  * Selected once at import from env; falls back to the log driver.
  * SendGrid takes priority when configured — Resend requires DNS-based domain
  * verification, which is unreachable while the app lives on a
@@ -143,10 +193,14 @@ export const whatsappProvider: NotifyProvider =
       )
     : new LogProvider('whatsapp(log)');
 
+export const pushProvider: NotifyProvider =
+  config.vapidPublic && config.vapidPrivate ? new WebPushProvider() : new LogProvider('webpush(log)');
+
 /** Which channels are genuinely wired — surfaced at boot and via /health. */
 export function notifyReady() {
   return {
     email: emailProvider.name !== 'email(log)',
     whatsapp: whatsappProvider.name !== 'whatsapp(log)',
+    webpush: pushProvider.name !== 'webpush(log)',
   };
 }

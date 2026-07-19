@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { CircleCard, type CircleSummary } from '@/components/CircleCard';
 import { CreateWizard } from '@/components/CreateWizard';
 import { AuthGate } from '@/components/AuthGate';
+import { EnablePush } from '@/components/EnablePush';
 import { Faucet } from '@/components/Faucet';
 import { Avatar, Button, Eyebrow, Seal } from '@/components/ui';
 import { useProfile } from '@/lib/profile';
@@ -86,6 +87,9 @@ export default function DashboardPage() {
             <div>
               <h1 className="font-display font-semibold text-2xl leading-none">Welcome, {displayName}</h1>
               <p className="text-[#6b6470] text-sm mt-1">Your circles, at a glance</p>
+              <div className="mt-2">
+                <EnablePush />
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
