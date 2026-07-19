@@ -1,4 +1,4 @@
-const CACHE = 'bhishi-shell-v1';
+const CACHE = 'bhishi-shell-v2';
 const SHELL = ['/', '/dashboard', '/offline'];
 
 self.addEventListener('install', (e) => {
@@ -28,5 +28,28 @@ self.addEventListener('fetch', (e) => {
         return res;
       })
       .catch(() => caches.match(req).then((hit) => hit || caches.match('/offline'))),
+  );
+});
+
+self.addEventListener('push', (e) => {
+  const data = (() => { try { return e.data.json(); } catch { return { title: 'Bhishi', body: e.data?.text() ?? '' }; } })();
+  e.waitUntil(
+    self.registration.showNotification(data.title || 'Bhishi', {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      data: { url: data.url || '/dashboard' },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/dashboard';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then((cs) => {
+      const hit = cs.find((c) => c.url.includes(url));
+      return hit ? hit.focus() : self.clients.openWindow(url);
+    }),
   );
 });
