@@ -98,11 +98,16 @@ export function useMember(): Member {
     | { address?: string }
     | undefined;
 
-  // `smartClient` is present exactly when the app has smart wallets enabled
-  // (SmartWalletsProvider mounted + SDK config). When it is, EVERY member action
-  // must be sponsored — the embedded EOA has no MON and must never be the sender.
-  const smartWalletsExpected = Boolean(smartClient);
   const smartAddress = smartAccount?.address as `0x${string}` | undefined;
+  // Smart wallets are "expected" when the client is up OR the user already has
+  // a linked smart account. The second clause is load-bearing: useSmartWallets()
+  // returns { client: undefined } while it is still INITIALIZING (it only
+  // throws when the provider isn't mounted at all), so right after page load
+  // `smartClient` alone reads false even for a user whose smart account
+  // already exists — and treating that as "feature disabled" resolved
+  // `address` to the embedded EOA and sent a RAW tx from an account with zero
+  // MON ("Signer had insufficient balance", e.g. a fast faucet claim).
+  const smartWalletsExpected = Boolean(smartClient) || Boolean(smartAddress);
   const gasless = Boolean(smartAddress && smartClient);
 
   // Identity selection — chosen ONCE, here.
