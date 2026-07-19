@@ -27,19 +27,64 @@ randomness. This is the **Design A** deployment (2026-07-19) — every member, i
 past round winners, pays their contribution every round, so the pot never shrinks
 mid-circle. Click any address to open it in the explorer.
 
-| Contract | What it does | Address |
-|----------|--------------|---------|
-| **CircleFactory** | Creates new savings circles (one-click clones) | [`0x4196BBaAB023458678379DDa68c5093e2c046D48`](https://testnet.monadexplorer.com/address/0x4196BBaAB023458678379DDa68c5093e2c046D48) |
-| **Circle** (implementation) | The circle logic all clones share | [`0xbffecAADE520A17a6728aC8cDc2A1e7F60266A74`](https://testnet.monadexplorer.com/address/0xbffecAADE520A17a6728aC8cDc2A1e7F60266A74) |
-| **ReputationRegistry** | Records who paid on time / who defaulted | [`0xEfAc337fD02F1060f7763C7a213feb0AC2B12068`](https://testnet.monadexplorer.com/address/0xEfAc337fD02F1060f7763C7a213feb0AC2B12068) |
-| **MockStable** (mUSDC) | Test stablecoin with a free faucet — **reused** from the prior deployment, so existing balances stayed valid | [`0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a`](https://testnet.monadexplorer.com/address/0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a) |
-| **Pyth Entropy** (external) | Delivers verifiable drand randomness for every draw | [`0x825c0390f379C631f3Cf11A82a37D20BddF93c07`](https://testnet.monadexplorer.com/address/0x825c0390f379C631f3Cf11A82a37D20BddF93c07) |
+| Contract | Role — when it's called, and by whom | Address |
+|----------|--------------------------------------|---------|
+| **CircleFactory** | You call it **once per circle**: `createCircle()` deploys a clone + registers it. The only address a user ever sends a "create" tx to. | [`0x4196BBaAB023458678379DDa68c5093e2c046D48`](https://testnet.monadexplorer.com/address/0x4196BBaAB023458678379DDa68c5093e2c046D48) |
+| **Circle** (implementation) | **Never called directly.** Holds the logic once; every circle clone `DELEGATECALL`s into it. Its own storage is empty and locked (`initialized = true`). → [how this works](#one-implementation-many-circles-the-delegatecall-model) | [`0xbffecAADE520A17a6728aC8cDc2A1e7F60266A74`](https://testnet.monadexplorer.com/address/0xbffecAADE520A17a6728aC8cDc2A1e7F60266A74) |
+| **Circle clone** (one per circle) | **Where your money lives.** Holds the pot, bonds and all state; you join/commit/reveal/claim here. Address is in the page URL (`/circle/0x…`). | e.g. [`0xc2796791…81E2e`](https://testnet.monadexplorer.com/address/0xc27967918b15232f95b3bac464ed43a36c181e2e) |
+| **ReputationRegistry** | **Zero direct txs by design.** A clone calls `attest()` *internally* when it hits COMPLETED, +1 score per member. Gated: non-circles revert `NotFactoryCircle()`. | [`0xEfAc337fD02F1060f7763C7a213feb0AC2B12068`](https://testnet.monadexplorer.com/address/0xEfAc337fD02F1060f7763C7a213feb0AC2B12068) |
+| **MockStable** (mUSDC) | Test stablecoin + free faucet. **Reused** across the redeploy so existing balances stayed valid. | [`0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a`](https://testnet.monadexplorer.com/address/0xDc97E76aC1e5F1Ce0488Ad07a139e2632Bd1487a) |
+| **Pyth Entropy** (external) | Its keeper calls **into** the clone with drand randomness to settle each draw. Not ours — that's the point. | [`0x825c0390f379C631f3Cf11A82a37D20BddF93c07`](https://testnet.monadexplorer.com/address/0x825c0390f379C631f3Cf11A82a37D20BddF93c07) |
 
 > **Prior deployment:** circles created before 2026-07-19 live on the previous factory
 > (`0x384597AE10181bC7215f4a57aF6caAe1a6eE26dc`) and keep running on the pre-Design-A
 > contract until they complete or stall — they are not migrated. See
 > [docs/LEGACY_README_NOTES.md](docs/LEGACY_README_NOTES.md) for the full history of
 > what changed and why, including the shrinking-pot bug Design A fixes.
+
+### One implementation, many circles — the DELEGATECALL model
+
+Deploying full circle logic per circle would cost ~11.5 KB of bytecode every time. Instead
+the logic is deployed **once** (the implementation above) and each circle is a **45-byte
+[EIP-1167](https://eips.ethereum.org/EIPS/eip-1167) minimal proxy** that `DELEGATECALL`s
+into it — cheap to create, and every clone gets **isolated storage**.
+
+The clone's entire on-chain bytecode, with the implementation address baked in:
+
+```
+0x363d3d373d3d3d363d73 bffecaade520a17a6728ac8cdc2a1e7f60266a74 5af43d82803e903d91602b57fd5bf3
+                       └── implementation address ──────────────┘ └─ 5a f4 = GAS, DELEGATECALL
+```
+
+**What this means in practice**
+
+| | Implementation `0xbffe…6A74` | Clone `0xc279…81E2e` |
+|---|---|---|
+| Bytecode | ~11.5 KB (all the logic) | 45 bytes (a pointer) |
+| Holds funds / state? | **No** — `seats() = 0`, `initialized = true` (locked) | **Yes** — pot, bonds, members |
+| Direct transactions | none — it only ever appears under **Internal Transactions** | all user actions land here |
+
+Two clones share identical code yet stay fully independent — verifiable right now:
+`seats/mode` reads `3 / 1` (AUCTION) on [`0xc279…81E2e`](https://testnet.monadexplorer.com/address/0xc27967918b15232f95b3bac464ed43a36c181e2e)
+vs `3 / 0` (LUCKY_DRAW) on [`0xc2c9…B93c`](https://testnet.monadexplorer.com/address/0xc2c970a2af9b06844221b02976a78360fdffb93c).
+
+**Why the explorer looks "empty" for the implementation and the registry**
+
+Explorers default to a *Transactions* tab filtered on `to == address`. Neither contract is
+ever a tx's `to` — both are reached only as **internal calls**. Their activity is real, just
+on a different tab:
+
+- Implementation → [**Internal Transactions**](https://testnet.monadvision.com/address/0xbffecAADE520A17a6728aC8cDc2A1e7F60266A74?tab=Internal+Transaction) — one delegatecall per user action, across every circle.
+- Registry → **Events/Logs**. Proof: the AUCTION circle's completion tx
+  [`0xffea4006…`](https://testnet.monadexplorer.com/tx/0xffea400620a454283197fb8c140d5f8be850dbf7f7487fb32f6f3f1b9383766f)
+  (block 46342285) carries **3 `Attested` logs emitted by the registry**, one per member.
+  Call chain: `Pyth keeper → Entropy → Circle clone → Registry.attest() ×3`.
+
+```
+you ──tx──> CircleFactory              (create, once)
+you ──tx──> Circle clone ──delegatecall──> Circle impl      (join/commit/reveal/claim)
+Pyth keeper ──tx──> Entropy ──call──> Circle clone ──call──> ReputationRegistry.attest()
+```
 
 ### Verifiable randomness — proven on-chain
 
