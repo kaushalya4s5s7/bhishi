@@ -27,6 +27,17 @@ const INPUT_CLS =
 /** Monad testnet explorer tx link. */
 const txUrl = (hash: string) => `https://testnet.monadexplorer.com/tx/${hash}`;
 
+/**
+ * Placeholder commitment for a past AUCTION winner's pay-only commit(). They are
+ * auto-revealed with bidDiscount = 0 inside commit() and never call reveal(), so
+ * commitmentOf[] is never compared against anything for them — see Circle.sol's
+ * commit(): "Their `commitment` value is irrelevant (never checked, since they
+ * skip reveal())". Any bytes32 is valid; a named constant makes the intent
+ * explicit instead of a bare 0x00…0 that reads like a bug.
+ */
+const PAST_WINNER_COMMITMENT =
+  '0x0000000000000000000000000000000000000000000000000000000000000001' as const;
+
 interface CircleViewProps {
   circleAddress: `0x${string}`;
   inviteToken?: string;
@@ -540,6 +551,19 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   }
 
   /**
+   * A past AUCTION winner pays their contribution with a bare commit() — no bid,
+   * no secret, no reveal. commit() is what actually moves the money
+   * (roundPool += contribution); the contract then auto-marks them revealed with
+   * bidDiscount = 0 in that same call, so they never reach reveal() and can't be
+   * slashed for a missing one. Their commitment value is never checked (they skip
+   * reveal), so any non-zero bytes32 works — we send a constant rather than
+   * asking them for a secret they'd have no use for.
+   */
+  function doCommitAsPastWinner() {
+    doWriteWithApproval('commit', [PAST_WINNER_COMMITMENT], contribution);
+  }
+
+  /**
    * Reveal, but only after locally re-running the contract's own commitment
    * check. A failed reveal isn't just a wasted tx — the member then looks like a
    * no-show and can be slashed, so we refuse to send one we know will revert.
@@ -1022,13 +1046,37 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )
         ) : stateName === 'COMMIT' ? (
           isMember ? (
-            iHaveWonLive ? (
-              // Past winner ("prized subscriber") — the contract auto-advances
-              // them each round so they never bid again. They still contribute
-              // and share dividends, but take no commit/reveal action.
-              <p className="text-sm text-[#6b6470]">
-                You&rsquo;ve already won a round, so you sit out the bidding from here on — you stay in the circle, keep contributing, and share each round&rsquo;s dividend. Nothing to do this round.
-              </p>
+            iHaveWonLive && isAuction ? (
+              // Past AUCTION winner ("prized subscriber"). Under Design A they are
+              // excluded from BIDDING, but they must still actively commit to
+              // PAY their contribution every round — commit() is what moves the
+              // money (roundPool += contribution). The contract auto-marks them
+              // revealed with a zero bid inside that same commit(), so they never
+              // reveal. Showing "nothing to do" here (the pre-Design-A behaviour)
+              // stalled the circle at advanceToReveal and left the winner
+              // slashable for a payment the UI said they didn't owe.
+              //
+              // AUCTION-only: the auto-reveal in commit() is gated on
+              // `mode == Mode.AUCTION`. A LUCKY_DRAW past winner has no bidding to
+              // be excluded from — they commit WITH a secret and must reveal
+              // manually like everyone else, so they fall through to the normal
+              // commit form below.
+              hasCommitted ? (
+                <p className="text-sm text-[#3a6d4a] font-medium">
+                  Paid this round. You sit out the bidding — nothing else to do.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-[#6b6470]">
+                    You&rsquo;ve already won, so you no longer bid — but you still pay{' '}
+                    <span className="font-medium text-[#0b0b0e]">{(Number(contribution) / 1e6).toFixed(2)} mUSDC</span>{' '}
+                    every round and keep sharing each round&rsquo;s dividend. Pay now to keep the circle moving.
+                  </p>
+                  <Button onClick={doCommitAsPastWinner} disabled={txPending}>
+                    {txPending ? 'Paying…' : `Pay ${(Number(contribution) / 1e6).toFixed(2)} mUSDC`}
+                  </Button>
+                </div>
+              )
             ) : hasCommitted ? (
               <p className="text-sm text-[#3a6d4a] font-medium">Committed this round. Wait for the reveal phase.</p>
             ) : (
@@ -1083,7 +1131,13 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )
         ) : stateName === 'REVEAL' ? (
           isMember ? (
-            iHaveWonLive ? (
+            iHaveWonLive && isAuction ? (
+              // AUCTION-only: a past winner was auto-revealed (bid 0) inside their
+              // commit(), so there is genuinely nothing to reveal. A LUCKY_DRAW
+              // past winner is NOT auto-revealed (that path is gated on
+              // `mode == Mode.AUCTION`) and must reveal like everyone else —
+              // telling them "nothing to reveal" would stall the round and get
+              // them slashed for a missed reveal, so they fall through below.
               <p className="text-sm text-[#6b6470]">
                 You&rsquo;ve already won a round, so you sit out the bidding — nothing to reveal. Waiting for the other members, then the draw runs.
               </p>
@@ -1197,17 +1251,17 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                       <div className="flex gap-2 items-center shrink-0">
                         {isYou && <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-full">You</span>}
                         {(() => {
-                          // A past winner is auto-marked committed+revealed by the
-                          // contract at each new round start (Circle.sol excludes
-                          // "prized subscribers" from bidding). Showing them as
-                          // "Committed" reads as an action they never took — label
-                          // it "Won" so it's clear they're sitting the round out,
-                          // not that the next round somehow started on their behalf.
+                          // A past winner is out of the BIDDING, but under Design A
+                          // they still pay every round — so "sitting out" alone is
+                          // misleading (it implies they owe nothing). Show that they
+                          // won AND, for the user's own row during COMMIT, whether
+                          // they've actually paid yet.
                           const memberWon = wonMembers.has(m.toLowerCase());
                           if (memberWon) {
+                            const showPaid = stateName === 'COMMIT' && isYou;
                             return (
                               <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-full">
-                                Won · sitting out
+                                {showPaid ? (hasCommitted ? 'Won · paid' : 'Won · pay due') : 'Won · no bid'}
                               </span>
                             );
                           }
