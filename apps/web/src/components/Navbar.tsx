@@ -10,6 +10,18 @@ function truncate(addr: string) {
   return addr.slice(0, 6) + '...' + addr.slice(-4);
 }
 
+// The B mark: two unequal bowls sharing one spine — ink (paid in) balanced
+// against brass (paid out). Matches public/logo-mark.svg.
+function BhishiMark({ size = 24 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+      <rect x="18" y="10" width="7" height="52" fill="#0b0b0e" />
+      <path d="M25 10 H38 A13 13 0 0 1 38 36 H25 Z" fill="#0b0b0e" />
+      <path d="M25 36 H40 A13 13 0 0 1 40 62 H25 Z" fill="#c9a15c" />
+    </svg>
+  );
+}
+
 const GUEST_LINKS = [
   { href: '/#how', label: 'How it works' },
   { href: '/#trust', label: 'Trust' },
@@ -42,7 +54,8 @@ export function Navbar() {
     return (
       <nav className="sticky top-0 z-[100] w-full px-4 sm:px-6 pt-4">
         <div className="max-w-7xl mx-auto bg-white/80 backdrop-blur-md shadow-sm rounded-full px-5 h-14 flex items-center justify-between">
-          <Link href="/" className="font-display font-semibold text-base tracking-[0.08em] uppercase text-[#0b0b0e]">
+          <Link href="/" className="flex items-center gap-2 font-display font-semibold text-base tracking-[0.08em] uppercase text-[#0b0b0e]">
+            <BhishiMark size={22} />
             Bhishi<span className="text-[#c9a15c]">.</span>
           </Link>
 
@@ -130,7 +143,8 @@ export function Navbar() {
       <div className="pointer-events-none absolute inset-y-0 left-4 sm:left-6 w-px bg-black/30" />
       <div className="pointer-events-none absolute inset-y-0 right-4 sm:right-6 w-px bg-black/30" />
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-        <Link href="/" className="font-display font-semibold text-base tracking-[0.08em] uppercase text-[#0b0b0e]">
+        <Link href="/" className="flex items-center gap-2 font-display font-semibold text-base tracking-[0.08em] uppercase text-[#0b0b0e]">
+          <BhishiMark size={22} />
           Bhishi<span className="text-[#c9a15c]">.</span>
         </Link>
 

@@ -1,0 +1,7 @@
+<svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Bhishi seal: the B mark inside a ring border, for badges/docs/socials. -->
+  <circle cx="36" cy="36" r="34" fill="none" stroke="#0b0b0e" stroke-width="1"/>
+  <rect x="18" y="10" width="7" height="52" fill="#0b0b0e"/>
+  <path d="M25 10 H38 A13 13 0 0 1 38 36 H25 Z" fill="#0b0b0e"/>
+  <path d="M25 36 H40 A13 13 0 0 1 40 62 H25 Z" fill="#c9a15c"/>
+</svg>
