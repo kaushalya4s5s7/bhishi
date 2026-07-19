@@ -38,22 +38,13 @@ export async function ensureStableAllowance(
   needed: bigint,
 ): Promise<void> {
   const balance = await stableBalance(userAddress);
-  // TEMP DEBUG — remove once the join()-without-approve bug is found.
-  console.log('[allowance-debug] balance check', { userAddress, spender, needed: needed.toString(), balance: balance.toString() });
   if (balance < needed) {
     throw new Error(
       `Insufficient mUSDC: need ${(Number(needed) / 1e6).toFixed(2)}, have ${(Number(balance) / 1e6).toFixed(2)}. Use the faucet first.`,
     );
   }
   const current = await stableAllowance(userAddress, spender);
-  // TEMP DEBUG — remove once the join()-without-approve bug is found.
-  console.log('[allowance-debug] allowance check', { userAddress, spender, needed: needed.toString(), current: current.toString(), willApprove: current < needed });
   if (current >= needed) return;
 
-  console.log('[allowance-debug] sending approve()', { spender });
-  const hash = await write({ address: STABLE, abi: mockStableAbi as any, functionName: 'approve', args: [spender, maxUint256] });
-  console.log('[allowance-debug] approve() confirmed', { hash });
-
-  const after = await stableAllowance(userAddress, spender);
-  console.log('[allowance-debug] allowance after approve', { after: after.toString(), sufficientNow: after >= needed });
+  await write({ address: STABLE, abi: mockStableAbi as any, functionName: 'approve', args: [spender, maxUint256] });
 }

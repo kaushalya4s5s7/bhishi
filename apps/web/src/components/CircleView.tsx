@@ -150,13 +150,19 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // from loadFromApi(), this only corrects/sharpens it.
   const loadLive = useCallback(async () => {
     try {
-      const [stateVal, memberCountVal, roundVal, roundPoolVal] = await Promise.all([
+      const [stateVal, memberCountVal, roundVal, roundPoolVal, bondVal] = await Promise.all([
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'roundPool' }).catch(() => 0n),
+        // bond is immutable on the contract, but the Join button's approval
+        // amount depends on it — if the indexer hasn't caught this circle yet,
+        // loadFromApi() never calls setBond(), and join() would otherwise fire
+        // with bond=0, skip the approve, and revert with InsufficientAllowance.
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }).catch(() => null),
       ]);
       setRoundPool(BigInt(roundPoolVal as any));
+      if (bondVal !== null) setBond(BigInt(bondVal as any));
 
       const count = Number(memberCountVal);
       const memberList = (
@@ -696,7 +702,19 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           isMember ? (
             <p className="text-sm text-[#6b6470]">You've joined. Waiting for all seats to fill.</p>
           ) : (
-            <Button onClick={() => doWriteWithApproval('join', [], bond)} disabled={txPending}>
+            <Button
+              onClick={() => {
+                // bond is read from both the indexer and live chain (loadLive);
+                // 0 here means neither has resolved it yet — never approve/join
+                // for an unverified amount (see loadLive's bond comment).
+                if (bond === 0n) {
+                  setTxError('Circle details are still loading — try again in a moment.');
+                  return;
+                }
+                doWriteWithApproval('join', [], bond);
+              }}
+              disabled={txPending}
+            >
               {txPending ? 'Joining…' : 'Join circle'}
             </Button>
           )
