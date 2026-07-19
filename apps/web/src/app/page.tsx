@@ -78,6 +78,9 @@ export default function LandingPage() {
         <StickySteps />
       </section>
 
+            <CommunityCarousel />
+
+
       {/* Built for real trust */}
       <section id="trust" className="py-24 sm:py-28">
         <div className="max-w-6xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
@@ -242,7 +245,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <CommunityCarousel />
 
       {/* CTA */}
       <section className="py-20 sm:py-24">

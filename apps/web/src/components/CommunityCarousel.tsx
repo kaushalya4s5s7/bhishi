@@ -15,15 +15,7 @@ export interface CommunityEntry {
  *  permanently so columns stay full even with only a handful of real
  *  entries. `id` is a stable prefix so it never collides with a cuid. */
 const SEED_ENTRIES: CommunityEntry[] = [
-  { id: 'seed-1', name: 'Ananya', community: 'Chit Fund', location: 'Chennai', message: 'Finally a savings circle where I don’t have to just trust the organizer’s word for it.' },
-  { id: 'seed-2', name: 'Rohit', community: 'Bhishi', location: 'Pune', message: 'Grew up with my mom running a bhishi on paper. This feels like the same trust, minus the spreadsheet errors.' },
-  { id: 'seed-3', name: 'Fatima', community: 'Committee (BC)', location: 'Hyderabad', message: 'Joined with three friends abroad — the invite link made it easy even across time zones.' },
-  { id: 'seed-4', name: 'Karan', community: 'Kitty Party', location: 'Delhi', message: 'The random draw actually feels fair. No one can quietly pick their favorite to go first.' },
-  { id: 'seed-5', name: 'Meera', community: 'ROSCA', location: 'Bengaluru', message: 'Been part of informal groups before — this is the first one where I could verify everything myself.' },
-  { id: 'seed-6', name: 'Vikram', community: 'Chit Fund', location: 'Mumbai', message: 'Set up a circle for my cousins in under five minutes. Nobody had to send bank details to anyone.' },
-  { id: 'seed-7', name: 'Priya', community: 'Bhishi', location: 'Ahmedabad', message: 'Love that my deposit is what backs the group, not someone’s promise.' },
-  { id: 'seed-8', name: 'Arjun', community: 'Committee (BC)', location: 'Kolkata', message: 'Auction mode is clever — got a smaller payout in exchange for going early, and everyone else got a dividend for it.' },
-];
+  ];
 
 function TestimonialCard({ t }: { t: CommunityEntry }) {
   return (
@@ -103,7 +95,7 @@ export function CommunityCarousel() {
           </p>
           <div className="mt-6">
             <Button href="/early-access" variant="ghost">
-              Add your card — join the waitlist
+             Join the early-access waitlist
             </Button>
           </div>
         </div>
