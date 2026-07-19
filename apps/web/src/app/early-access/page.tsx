@@ -20,7 +20,21 @@ type Status = 'idle' | 'loading' | 'done' | 'dismissed' | 'error';
 export default function EarlyAccessPage() {
   const { ready, authenticated, login, user, getAccessToken } = usePrivy();
   const router = useRouter();
-  const email = user?.email?.address ?? '';
+  // Native email/OTP accounts carry the address in `email.address`. A
+  // Google (or other OAuth) sign-in has no such top-level `email` at all —
+  // its address lives on the linked account entry instead, under `.email`.
+  // Mirrors PrivyService.verify()'s emailAccount/oauthAccount fallback on
+  // the API side; without this, a Google-only sign-in submits email: '' and
+  // the API correctly rejects it as "A valid email is required".
+  const oauthEmail = (user?.linkedAccounts ?? []).find(
+    (a): a is typeof a & { email: string } => 'email' in a && typeof (a as { email?: unknown }).email === 'string',
+  )?.email;
+  const resolvedEmail = user?.email?.address ?? oauthEmail ?? '';
+  // Fallback for any linked-account shape the check above doesn't cover —
+  // let the user type it in rather than silently fail the "valid email"
+  // check with an empty, readonly field they can't fix.
+  const [manualEmail, setManualEmail] = useState('');
+  const email = resolvedEmail || manualEmail;
 
   const [name, setName] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
@@ -172,10 +186,16 @@ export default function EarlyAccessPage() {
             <input
               type="email"
               value={email}
-              readOnly
-              className="w-full px-4 py-2.5 border border-black/15 bg-black/5 text-[#6b6470]"
+              readOnly={Boolean(resolvedEmail)}
+              onChange={e => setManualEmail(e.target.value)}
+              required
+              className={`w-full px-4 py-2.5 border border-black/15 focus:outline-none focus:ring-2 focus:ring-[#c9a15c] ${
+                resolvedEmail ? 'bg-black/5 text-[#6b6470]' : ''
+              }`}
             />
-            <p className="text-xs text-[#6b6470] mt-1">Verified via sign-in</p>
+            <p className="text-xs text-[#6b6470] mt-1">
+              {resolvedEmail ? 'Verified via sign-in' : 'We couldn’t detect an email from your sign-in — please enter one'}
+            </p>
           </div>
 
           <div>
