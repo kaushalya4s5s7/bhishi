@@ -7,12 +7,12 @@ import { HeroCTAs } from '@/components/HeroCTAs';
 import { SmoothScroll } from '@/components/SmoothScroll';
 
 const TRUST_ITEMS = [
-  { label: 'Non-custodial' },
-  { label: 'VRF-verified randomness' },
-  { label: 'Bond-backed circles' },
+  { label: 'No one holds your money' },
+  { label: 'Winner picked by verifiable randomness' },
+  { label: 'Backed by a security deposit' },
   { label: 'Built on Monad' },
   { label: 'Fully on-chain' },
-  { label: 'Reclaim anytime' },
+  { label: 'Get your funds back anytime' },
 ];
 
 export default function LandingPage() {
@@ -63,7 +63,7 @@ export default function LandingPage() {
 
           <Reveal delay={0.1} className="lg:text-right">
             <p className="font-mono text-xs tracking-[0.2em] uppercase text-[#6b6470] mb-3">Built on</p>
-            <p className="font-display text-lg font-semibold text-[#0b0b0e]">Monad &middot; Gelato VRF</p>
+            <p className="font-display text-lg font-semibold text-[#0b0b0e]">Monad &middot; Pyth Entropy</p>
           </Reveal>
         </div>
       </section>
@@ -94,8 +94,8 @@ export default function LandingPage() {
             <div className="mt-8 divide-y divide-black/10">
               {[
                 'No organizer can touch your funds — ever',
-                'Miss a payment and your bond covers the group',
-                'VRF gone silent? Reclaim your funds anytime',
+                'Miss a payment and your deposit covers the group, so no one else loses out',
+                'If the winner draw ever stalls, anyone can trigger a refund — your money is never stuck',
               ].map(item => (
                 <div key={item} className="flex gap-4 items-start py-3.5 text-sm text-[#0b0b0e]">
                   <span className="mt-0.5 font-mono text-xs text-[#c9a15c] shrink-0">＋</span>
@@ -164,14 +164,14 @@ export default function LandingPage() {
               Provably fair payouts
             </h2>
             <p className="mt-5 text-[#6b6470] leading-relaxed max-w-md">
-              We use Gelato&apos;s VRF so every winner is chosen by randomness anyone can verify
-              on-chain — not a spreadsheet, not a person&apos;s word.
+              We use Pyth Entropy, an outside randomness service, so every winner is picked by
+              chance anyone can double-check — not a spreadsheet, not a person&apos;s word, not us.
             </p>
             <div className="mt-8 divide-y divide-black/10">
               {[
-                'Verifiable randomness, auditable by anyone',
-                'Automatic settlement the moment a round closes',
-                'Only your bond secures the whole circle',
+                'Anyone can verify the winner was picked fairly',
+                'Payouts happen automatically the moment a round closes',
+                'Your deposit is the only thing keeping the circle honest',
               ].map(item => (
                 <div key={item} className="flex gap-4 items-start py-3.5 text-sm text-[#0b0b0e]">
                   <span className="mt-0.5 font-mono text-xs text-[#c9a15c] shrink-0">＋</span>

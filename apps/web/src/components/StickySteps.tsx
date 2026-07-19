@@ -5,15 +5,15 @@ import { useRef } from 'react';
 const STEPS = [
   {
     title: 'Join a circle',
-    desc: 'Set a contribution amount and seats. Everyone locks a bond to guarantee participation.',
+    desc: 'Set how much everyone pays in and how many people can join. Everyone puts down a small deposit to show they’re serious.',
   },
   {
-    title: 'Contribute each round',
-    desc: 'Commit & reveal your contribution every cycle, privately and on-chain.',
+    title: 'Pay in each round',
+    desc: 'Every round, your payment is locked in secretly first, then revealed for everyone to see — so no one can peek at what others are paying and change their move.',
   },
   {
-    title: 'VRF picks the winner',
-    desc: 'Verifiable randomness decides the payout each round — provably fair, no exceptions.',
+    title: 'A random draw picks the winner',
+    desc: 'Pyth Entropy — an outside, tamper-proof source of randomness — picks who gets paid each round. Anyone can check the result on-chain. No one, including us, chooses the winner.',
   },
 ];
 
