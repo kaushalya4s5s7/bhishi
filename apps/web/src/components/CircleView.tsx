@@ -192,24 +192,30 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // from loadFromApi(), this only corrects/sharpens it.
   const loadLive = useCallback(async () => {
     try {
-      const [stateVal, memberCountVal, roundVal, bondVal, seatsVal, contributionVal] = await Promise.all([
+      const [stateVal, memberCountVal, roundVal, bondVal, seatsVal, contributionVal, modeVal] = await Promise.all([
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
-        // bond/seats/contribution are immutable circle config, but everything
+        // bond/seats/contribution/mode are immutable circle config, but everything
         // the user ACTS on depends on them (join approves `bond`; the UI shows
-        // seats and per-round contribution). If the indexer hasn't caught this
-        // circle yet, loadFromApi() 404s (or serves a placeholder row with
-        // zeros), so these must come from the chain — otherwise join() fires
-        // with bond=0, skips the approve, and reverts InsufficientAllowance,
-        // and the page renders "2 / 0 seats" style nonsense.
+        // seats and per-round contribution; MODE decides whether the bid input is
+        // shown at all). If the indexer hasn't caught this circle yet,
+        // loadFromApi() 404s (or serves a placeholder row with zeros), so these
+        // must come from the chain — otherwise join() fires with bond=0, skips
+        // the approve, and reverts InsufficientAllowance; the page renders
+        // "2 / 0 seats" nonsense; and — the bug this `mode` read fixes — a fresh
+        // AUCTION circle falls back to the LUCKY_DRAW default, hiding the bid
+        // field so a member can only enter a secret, never a bid.
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }).catch(() => null),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }).catch(() => null),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }).catch(() => null),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'mode' }).catch(() => null),
       ]);
       if (bondVal !== null) setBond(BigInt(bondVal as any));
       if (seatsVal !== null) setSeats(Number(seatsVal as any));
       if (contributionVal !== null) setContribution(BigInt(contributionVal as any));
+      // Circle.sol Mode enum: 0 = LUCKY_DRAW, 1 = AUCTION.
+      if (modeVal !== null) setMode(Number(modeVal) === 1 ? 'AUCTION' : 'LUCKY_DRAW');
 
       const count = Number(memberCountVal);
       const memberList = (
