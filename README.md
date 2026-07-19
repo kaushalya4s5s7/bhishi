@@ -4,21 +4,55 @@
 
 [![Monad Testnet](https://img.shields.io/badge/Monad-Testnet-7C3AED)](https://testnet.monadexplorer.com)
 
-Bhishi removes the two dangers of every savings circle (ROSCA):
-1. **The organizer holds your money** → Bhishi uses non-custodial escrow
-2. **The organizer picks who gets paid** → Bhishi uses Pyth Entropy (verifiable randomness)
+## The Tradition
 
-And the third danger nobody designs for:
-3. **The machinery itself strands your funds** → Bhishi has permissionless reclaim paths
+One of the world's oldest financial instruments needs no bank: a group of people
+who trust each other pool a fixed amount every month, and each month **one member
+takes the whole pot** — rotating until everyone has had a turn. Interest-free
+credit and forced savings in one, centuries old, running on nothing but
+neighborhood trust. Every community independently invented it:
 
-## Four Provable Money Shots
+**Bhishi** (Maharashtra) · **Chit fund** (South India) · **Committee/Kameti**
+(North India, Pakistan) · **Tanda** (Mexico) · **Susu** (Ghana, Caribbean) ·
+**Hui** (China, Vietnam) · **Gam'eya** (Egypt) · **Stokvel** (South Africa) ·
+academics call it a **ROSCA** — Rotating Savings and Credit Association.
 
-| Proof | What it shows |
-|-------|--------------|
-| ✓ **CUSTODY** | `organizer.withdraw()` reverts — the contract has no such function |
-| ✓ **FAIRNESS** | Winner is selected by Pyth Entropy, not by any human |
-| ✓ **DEFAULT** | Missed reveal → bond auto-slashes, winner still made whole |
-| ✓ **LIVENESS** | VRF silence → any member calls `reclaimOnStall()`, funds recovered |
+## The Problem — why the tradition is dying
+
+The whole design rests on one thing: **everyone must personally trust one
+organizer and every other member.** That's exactly what's breaking:
+
+1. **Custody risk** — the organizer physically holds the pot. If they vanish, the
+   money is gone. High-profile chit-fund scams have burned entire communities and
+   made "chit fund" a dirty word for a generation.
+2. **Favoritism** — the organizer decides who gets the pot when. Draws happen
+   behind closed doors; the organizer's cousin somehow wins first.
+3. **Default with no teeth** — a member who already took the pot stops paying.
+   The only enforcement is social pressure, and everyone after them gets less.
+4. **The locality ceiling** — trust = geography. The circle only works with people
+   whose doors you can knock on. Move to a city, join the diaspora, and your trust
+   network is gone — which is why the young generation, who'd benefit most, never
+   joins. The tradition isn't dying because the idea is bad; it's dying because
+   **trust doesn't travel.**
+5. **No records** — cash and a notebook. Disputes are unresolvable, so one
+   argument kills a circle.
+
+## The Solution — what we built, problem by problem
+
+Keep the tradition exactly as it is — same pot, same rotation, same monthly
+rhythm — and replace the one thing that's failing: move the trust from the
+organizer's character to collateral and code.
+
+| Tradition's failure | What Bhishi builds instead | Proof |
+|---|---|---|
+| Organizer holds the pot | **Nobody does.** Funds sit in a per-circle escrow contract with **no withdraw function** — not even for us | ✓ **CUSTODY** — `withdraw()` reverts: the function doesn't exist |
+| Organizer picks winners | **No human picks.** Winner comes from [Pyth Entropy](https://docs.pyth.network/entropy) drand randomness (lucky-draw) or a sealed-bid auction settled on-chain | ✓ **FAIRNESS** — every draw's fulfilment tx is sent by Pyth's keeper, [verifiable below](#verifiable-randomness--proven-on-chain) |
+| Defaulters face only social pressure | **Defaulters lose real money.** Every member locks a bond up front; miss a payment and it's **auto-slashed** — pot topped up, remainder paid to the honest members. Past winners keep paying every round, and are slashable like anyone else | ✓ **DEFAULT** — slash flow proven in tests + live; winner still made whole |
+| Trust can't travel beyond the neighborhood | **The bond IS the trust.** You can circle with people you've never met — an invite link, email login (embedded wallets, no crypto knowledge needed), gas sponsored. On-time members build a portable on-chain **reputation score** that follows them to the next circle | ReputationRegistry — attested on completion, [fake circles can't mint it](#deployed-contracts-monad-testnet) |
+| Cash + notebook, disputes unresolvable | **Every action is a transaction.** Join, payment, bid, draw, payout — all on-chain, all linked in the app's activity feed. And if the infrastructure itself ever dies mid-round, **any member** can reclaim the funds — no one to beg | ✓ **LIVENESS** — permissionless `reclaimOnStall()` after VRF timeout |
+
+Every ✓ above is not a promise — each one is proven by transactions on Monad
+testnet you can click and verify in the sections below.
 
 ## Deployed Contracts (Monad Testnet)
 
@@ -230,25 +264,52 @@ the conservation check held after every round:
 Same guarantees as the auction — just a random winner instead of a bid-based one, and
 no dividend mechanic (the whole pot goes to the drawn winner).
 
-## Architecture
+## Architecture — resilient by design
+
+**One principle runs through every layer: the chain is the only source of truth;
+everything else is a cache that can die and be rebuilt.** No off-chain component
+can lose your money or block a round — the worst any outage does is make the UI a
+few seconds slower. Here's each segment and the exact job it does for the build:
 
 ```
-bhishi/
-├── packages/contracts/   # Foundry — the moat (Circle.sol, CircleFactory.sol, ReputationRegistry.sol)
-├── packages/shared/      # Generated ABIs + addresses (@bhishi/shared)
-├── packages/events/      # RPC event reader (@bhishi/events)
-├── packages/db/          # Prisma schema — off-chain indexed mirror of chain state
-├── apps/web/             # Next.js + Privy embedded wallets + gas sponsorship
-├── apps/api/             # NestJS — serves indexed circle data, invites, notifications
-├── apps/workers/         # Indexer (chain → Postgres), VRF keeper, notify worker
-└── scripts/lifecycle-run.ts  # Full on-chain lifecycle runner (both modes), Pyth-verified
+                         ┌─────────────────────────────────────────────┐
+   Browser (Next.js)     │  Monad testnet — SOURCE OF TRUTH            │
+   ├─ Privy login  ──────┼─► CircleFactory ─► Circle clones (escrow)   │
+   ├─ reads chain direct │      │                    │                 │
+   │  (never blocked) ◄──┼──────┘        Pyth Entropy ─► draw callback │
+   └─ writes txs ────────┼─► Circle clone ─► ReputationRegistry        │
+                         └───────▲──────────────────────┬──────────────┘
+                                 │ getLogs (replayable)  │ events
+              ┌──────────────────┴───────┐              │
+   NestJS API │  Postgres (rebuildable cache) ◄─────────┤ Indexer worker
+   ├─ serves indexed reads (fast)        │              ├ VRF keeper (draws)
+   ├─ chain-read FALLBACK when cache lags │             └ Notify worker ─► Redis/BullMQ
+   └─ invites · profiles · sponsorship   │                                  └► email/WhatsApp/push
 ```
 
-Full architecture: [docs/architecture-spec.md](docs/architecture-spec.md)
-Threat model: [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)
-Design A fix spec: [DESIGN_A_PLAN.md](DESIGN_A_PLAN.md)
-Bond sizing research: [docs/BOND_SIZING_RESEARCH.md](docs/BOND_SIZING_RESEARCH.md)
-Legacy README notes (what changed and why): [docs/LEGACY_README_NOTES.md](docs/LEGACY_README_NOTES.md)
+| Segment | What it is | How it helps the build |
+|---|---|---|
+| **`packages/contracts`** | Foundry — `Circle.sol`, `CircleFactory.sol`, `ReputationRegistry.sol` | **The moat.** All money logic + custody live here; nothing else can move funds. One implementation, cloned per circle (45-byte proxies) for cheap isolated escrow. 78 tests + 2 invariant suites (128k calls each). |
+| **`packages/shared`** | Generated ABIs + deployed addresses (`@bhishi/shared`) | **Single wiring point.** ABIs are generated from the compiled contract, so web/api/workers can never drift from what's actually deployed — one `sync` after a deploy propagates everywhere. |
+| **`packages/events`** | Chunked RPC log reader (`@bhishi/events`) | **Replay engine.** Reads `getLogs` in ≤100-block windows (Monad's cap). Because every chain event is replayable, the entire Postgres cache can be rebuilt from block zero — the DB is disposable. |
+| **`packages/db`** | Prisma schema — indexed **mirror** of chain state | **Speed, not truth.** Serves circle lists/history in ~40ms instead of 3+ sequential RPC round-trips. Explicitly a cache: wipe it and the indexer reconstructs it. |
+| **`apps/web`** | Next.js · Privy embedded wallets · gas sponsorship | **Zero-crypto onboarding.** Email/Google login mints a wallet; a paymaster sponsors gas so members never touch native tokens. Critically, it **reads the chain directly for anything it acts on** — so a lagging or down indexer never blocks a join/commit/reveal. |
+| **`apps/api`** | NestJS — indexed reads, invites, profiles, sponsorship | **Fast path with a chain fallback.** Serves cached reads, but when the cache lags (e.g. a brand-new circle) it reads the missing fact **straight from the contract** (creator, mode, config) — so features work the instant a tx mines, not when the indexer catches up. |
+| **`apps/workers`** | 3 independent processes | **Off-chain automation, none load-bearing.** **Indexer**: chain → Postgres, resumes from a persisted cursor. **VRF keeper**: nudges permissionless `requestDraw()`/`advanceToReveal()` so rounds never stall waiting on a human. **Notify**: round-deadline reminders via Redis/BullMQ → email/WhatsApp/web-push. Kill any of them and the protocol still runs — members just self-drive via the UI. |
+| **`scripts/lifecycle-run.ts`** | Full on-chain lifecycle runner | **Living proof.** Drives a complete 3-round circle (both modes) against the live contracts, Pyth-fulfilled, asserting the conservation invariant every round — the transactions in this README came from it. |
+
+**Why this shape matters:** the four failure modes I hit building this — indexer
+behind, RPC rate-limited, DB migration missing, a draw never triggered — each
+degraded *one* cache or worker, and in every case the chain-direct reads and
+permissionless recovery paths meant **no circle ever lost funds or got
+permanently stuck.** That's the resilience: off-chain is convenience, on-chain is
+truth.
+
+Deeper docs: [architecture-spec](docs/architecture-spec.md) ·
+[threat model](docs/THREAT-MODEL.md) ·
+[Design A fix](DESIGN_A_PLAN.md) ·
+[bond sizing](docs/BOND_SIZING_RESEARCH.md) ·
+[legacy notes](docs/LEGACY_README_NOTES.md)
 
 ## Quick Start
 
