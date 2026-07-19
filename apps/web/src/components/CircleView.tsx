@@ -75,6 +75,17 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // it for the same round. A genuinely NEW round (higher currentRound) always
   // wins — that only ever moves forward.
   const liveProgressRef = useRef<{ round: number; state: number }>({ round: -1, state: -1 });
+  // Monotonic id per loadLive() run. A poll's results are only applied if it is
+  // STILL the newest run when its reads resolve — otherwise a slow, in-flight
+  // poll from a previous tick (or previous userAddress) lands late and
+  // overwrites fresher state, which is exactly the "panel alternates between
+  // committed/not-committed and 457/0.00 balance by itself" flicker.
+  const liveSeqRef = useRef(0);
+  // bond/seats/contribution/mode are IMMUTABLE per circle — reading them on
+  // every 10s poll only burns RPC quota (Monad caps 15 req/s; the poll burst
+  // routinely tripped it, and each tripped read painted a fallback zero).
+  // Read them until they've all succeeded once, then never again.
+  const configLoadedRef = useRef(false);
   // The round in which THIS user was first observed (via chain hasWon) to have
   // won. Lets the "you won this round" callout fire live — the moment the draw
   // settles — without mistaking a PAST win (hasWon stays true forever) for a
@@ -148,43 +159,61 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // anything a user ACTS on is re-verified live in loadLive() below.
   const loadFromApi = useCallback(async () => {
     try {
-      const [detail, eventsRes] = await Promise.all([
+      // allSettled, NOT all: detail and events are independent endpoints, and a
+      // detail failure must never throw away successfully-fetched events. (This
+      // happened in production: detail 500'd — missing DB migration — and the
+      // rejected Promise.all discarded the events too, so the activity feed
+      // showed "no activity" while the events endpoint was serving data fine.)
+      const [detailRes, eventsSettled] = await Promise.allSettled([
         fetchCircleDetail(circleAddress),
-        fetch(apiUrl(`/api/circles/${circleAddress}/events?take=20`)).then(r => (r.ok ? r.json() : { events: [] })).catch(() => ({ events: [] })),
+        fetch(apiUrl(`/api/circles/${circleAddress}/events?take=20`)).then(r => (r.ok ? r.json() : { events: [] })),
       ]);
 
-      const memberList = detail.members.map(m => m.address);
-      setWonMembers(new Set(detail.members.filter(m => m.hasWon).map(m => m.address.toLowerCase())));
-      const stateIdx = STATE_NAMES.indexOf(detail.state as StateName);
-      const apiState = stateIdx === -1 ? 0 : stateIdx;
-      const apiRound = detail.currentRound;
-      // Never let the lagging indexer regress phase/round below what the live
-      // chain read has already confirmed for this round (see liveProgressRef).
-      // A newer round from the API is always accepted (only moves forward).
-      const live = liveProgressRef.current;
-      const apiIsStale =
-        apiRound < live.round || (apiRound === live.round && apiState < live.state);
-      if (!apiIsStale) {
-        setState(apiState);
-        setRound(apiRound);
+      if (detailRes.status === 'fulfilled') {
+        const detail = detailRes.value;
+        const memberList = detail.members.map(m => m.address);
+        setWonMembers(new Set(detail.members.filter(m => m.hasWon).map(m => m.address.toLowerCase())));
+        const stateIdx = STATE_NAMES.indexOf(detail.state as StateName);
+        const apiState = stateIdx === -1 ? 0 : stateIdx;
+        const apiRound = detail.currentRound;
+        // Never let the lagging indexer regress phase/round below what the live
+        // chain read has already confirmed for this round (see liveProgressRef).
+        // A newer round from the API is always accepted (only moves forward).
+        const live = liveProgressRef.current;
+        const apiIsStale =
+          apiRound < live.round || (apiRound === live.round && apiState < live.state);
+        if (!apiIsStale) {
+          setState(apiState);
+          setRound(apiRound);
+        }
+        setMode(detail.mode);
+        setSeats(detail.seats);
+        setContribution(BigInt(detail.contribution));
+        setBond(BigInt(detail.bond));
+        // On-chain members[] never shrinks, so an API list SHORTER than what we
+        // already show is a lagging indexer row — applying it would oscillate the
+        // members panel (3 ↔ 2) against loadLive every poll. Keep the longer list.
+        setMembers(prev => (memberList.length >= prev.length ? memberList : prev));
+        setRoundBids(detail.roundBids ?? []);
+        setRounds(detail.rounds ?? []);
+      } else {
+        // Detail failed (500 / not indexed yet) — loadLive() fills everything
+        // display-critical from chain; events below still apply on their own.
+        console.error(detailRes.reason);
       }
-      setMode(detail.mode);
-      setSeats(detail.seats);
-      setContribution(BigInt(detail.contribution));
-      setBond(BigInt(detail.bond));
-      setMembers(memberList);
-      const indexed = (eventsRes.events as { eventName: string; payload: Record<string, unknown>; blockNumber: string; txHash: string }[]).map(e => ({
-        name: e.eventName ?? 'Event',
-        args: e.payload ?? {},
-        blockNumber: BigInt(e.blockNumber ?? '0'),
-        txHash: e.txHash ?? '',
-      }));
-      setEvents(indexed);
-      setRoundBids(detail.roundBids ?? []);
-      setRounds(detail.rounds ?? []);
-      // Drop any optimistic entry the indexer has now caught up on.
-      const indexedHashes = new Set(indexed.map(e => e.txHash.toLowerCase()));
-      setPendingEvents(prev => prev.filter(p => !indexedHashes.has(p.txHash.toLowerCase())));
+
+      if (eventsSettled.status === 'fulfilled') {
+        const indexed = (eventsSettled.value.events as { eventName: string; payload: Record<string, unknown>; blockNumber: string; txHash: string }[]).map(e => ({
+          name: e.eventName ?? 'Event',
+          args: e.payload ?? {},
+          blockNumber: BigInt(e.blockNumber ?? '0'),
+          txHash: e.txHash ?? '',
+        }));
+        setEvents(indexed);
+        // Drop any optimistic entry the indexer has now caught up on.
+        const indexedHashes = new Set(indexed.map(e => e.txHash.toLowerCase()));
+        setPendingEvents(prev => prev.filter(p => !indexedHashes.has(p.txHash.toLowerCase())));
+      }
     } catch (e) {
       // If the API can't serve it (e.g. brand-new circle not indexed yet),
       // loadLive() still fills everything from chain — just a touch slower.
@@ -202,7 +231,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // before the indexer catches up. Non-blocking — the page is already painted
   // from loadFromApi(), this only corrects/sharpens it.
   const loadLive = useCallback(async () => {
+    // Stale-run guard: capture this run's id + the address it reads FOR. Any
+    // setState below only applies while this is still the newest run — a slow
+    // in-flight poll (previous tick, or previous userAddress) must never land
+    // late and overwrite fresher state.
+    const seq = ++liveSeqRef.current;
+    const addr = userAddress;
+    const fresh = () => seq === liveSeqRef.current;
     try {
+      const skipConfig = configLoadedRef.current;
       const [stateVal, memberCountVal, roundVal, bondVal, seatsVal, contributionVal, modeVal] = await Promise.all([
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
@@ -214,19 +251,25 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         // loadFromApi() 404s (or serves a placeholder row with zeros), so these
         // must come from the chain — otherwise join() fires with bond=0, skips
         // the approve, and reverts InsufficientAllowance; the page renders
-        // "2 / 0 seats" nonsense; and — the bug this `mode` read fixes — a fresh
-        // AUCTION circle falls back to the LUCKY_DRAW default, hiding the bid
-        // field so a member can only enter a secret, never a bid.
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }).catch(() => null),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }).catch(() => null),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }).catch(() => null),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'mode' }).catch(() => null),
+        // "2 / 0 seats" nonsense; and a fresh AUCTION circle falls back to the
+        // LUCKY_DRAW default, hiding the bid field. Immutable → once all four
+        // have succeeded (configLoadedRef), stop re-reading them every poll:
+        // the burst was tripping Monad's 15 req/s cap for no information.
+        skipConfig ? Promise.resolve(null) : publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }).catch(() => null),
+        skipConfig ? Promise.resolve(null) : publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }).catch(() => null),
+        skipConfig ? Promise.resolve(null) : publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }).catch(() => null),
+        skipConfig ? Promise.resolve(null) : publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'mode' }).catch(() => null),
       ]);
-      if (bondVal !== null) setBond(BigInt(bondVal as any));
-      if (seatsVal !== null) setSeats(Number(seatsVal as any));
-      if (contributionVal !== null) setContribution(BigInt(contributionVal as any));
-      // Circle.sol Mode enum: 0 = LUCKY_DRAW, 1 = AUCTION.
-      if (modeVal !== null) setMode(Number(modeVal) === 1 ? 'AUCTION' : 'LUCKY_DRAW');
+      if (fresh() && !skipConfig) {
+        if (bondVal !== null) setBond(BigInt(bondVal as any));
+        if (seatsVal !== null) setSeats(Number(seatsVal as any));
+        if (contributionVal !== null) setContribution(BigInt(contributionVal as any));
+        // Circle.sol Mode enum: 0 = LUCKY_DRAW, 1 = AUCTION.
+        if (modeVal !== null) setMode(Number(modeVal) === 1 ? 'AUCTION' : 'LUCKY_DRAW');
+        if (bondVal !== null && seatsVal !== null && contributionVal !== null && modeVal !== null) {
+          configLoadedRef.current = true;
+        }
+      }
 
       const count = Number(memberCountVal);
       const memberList = (
@@ -294,22 +337,27 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       // false after we've already confirmed a commit this round via a lagging
       // node) — hold the prior value instead of regressing to "not committed".
       let nextCommittedResolvedLater = false;
-      let nextClaimable = 0n;
-      let nextBalance = 0n;
-      let nextRevealed = false;
+      // Member-specific reads. EVERY one uses the READ_FAILED sentinel: a
+      // failed read (routine under the 15 req/s RPC cap) must mean "keep the
+      // previous value", never "paint the fallback zero". The old
+      // `.catch(() => 0n)` on balance is what flashed "Balance 0.00" and made
+      // the panel alternate on every rate-limited poll.
+      const READ_FAILED = '__failed__' as const;
+      let nextClaimable: bigint | typeof READ_FAILED = READ_FAILED;
+      let nextBalance: bigint | typeof READ_FAILED = READ_FAILED;
+      let nextRevealed: boolean | typeof READ_FAILED = READ_FAILED;
       const liveRoundNum = Number(roundVal);
-      if (userAddress) {
-        const READ_FAILED = '__failed__';
+      if (addr) {
         const [committedRaw, info, bal, hasRevealed] = await Promise.all([
           // committed: THE authoritative "committed this round" flag — reset to
           // false each round for non-winners by the contract. (commitmentOf is
           // NOT read: the contract never clears it on round advance, so it
           // would hold a stale prior-round hash and wrongly read as committed.)
-          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'committed', args: [userAddress] }).catch(() => READ_FAILED),
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'committed', args: [addr] }).catch(() => READ_FAILED),
           // memberInfo returns (joined, stakedBond, contribution, claimable)
-          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [userAddress] }).catch(() => [false, 0n, 0n, 0n]),
-          stableBalance(userAddress).catch(() => 0n),
-          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'revealed', args: [userAddress] }).catch(() => false),
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [addr] }).catch(() => READ_FAILED),
+          stableBalance(addr).catch(() => READ_FAILED),
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'revealed', args: [addr] }).catch(() => READ_FAILED),
         ]);
         // If the round moved on, the previous round's "committed" no longer
         // applies — clear the sticky marker so the fresh round starts clean.
@@ -327,10 +375,14 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         const committedReadFailed = committedRaw === READ_FAILED;
         const staleFalse = !nextCommitted && committedRoundRef.current === liveRoundNum;
         nextCommittedResolvedLater = committedReadFailed || staleFalse;
-        nextClaimable = BigInt((info as any)[3] ?? 0n);
-        nextBalance = bal;
-        nextRevealed = Boolean(hasRevealed);
+        if (info !== READ_FAILED) nextClaimable = BigInt((info as any)[3] ?? 0n);
+        if (bal !== READ_FAILED) nextBalance = bal as bigint;
+        if (hasRevealed !== READ_FAILED) nextRevealed = Boolean(hasRevealed);
       }
+
+      // A newer poll started (or the identity changed) while this one's reads
+      // were in flight — its data is already outdated, drop it whole.
+      if (!fresh()) return;
 
       // Record the furthest-along phase chain has confirmed, so the lagging
       // indexer path (loadFromApi) can't later regress the UI below it.
@@ -350,9 +402,9 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       // closure copy can be stale). Inconclusive poll → keep prior; otherwise
       // take the fresh read.
       setCommittedFlag(prev => (nextCommittedResolvedLater ? prev : nextCommitted));
-      setClaimable(nextClaimable);
-      setBalance(nextBalance);
-      setRevealed(nextRevealed);
+      if (nextClaimable !== READ_FAILED) setClaimable(nextClaimable);
+      if (nextBalance !== READ_FAILED) setBalance(nextBalance);
+      if (nextRevealed !== READ_FAILED) setRevealed(nextRevealed);
     } catch (e) {
       console.error(e);
     }
