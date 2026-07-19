@@ -56,6 +56,19 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // for a round, drawRequestedAt itself makes any further call a cheap no-op
   // via tryRequestDraw's own check (no need to re-derive that from state here).
   const drawRequestedCheckedRef = useRef<number | null>(null);
+  // The furthest-along (round, state) pair the LIVE chain read has confirmed.
+  // loadFromApi() reads the indexer, which lags chain by up to ~20s, so its
+  // response can carry a STALE earlier phase (e.g. still COMMIT after chain has
+  // moved to REVEAL). Applying that would flicker the UI backward. We record
+  // what loadLive() has seen and refuse to let the indexer path regress below
+  // it for the same round. A genuinely NEW round (higher currentRound) always
+  // wins — that only ever moves forward.
+  const liveProgressRef = useRef<{ round: number; state: number }>({ round: -1, state: -1 });
+  // The round in which THIS user was first observed (via chain hasWon) to have
+  // won. Lets the "you won this round" callout fire live — the moment the draw
+  // settles — without mistaking a PAST win (hasWon stays true forever) for a
+  // fresh one. -1 = never observed winning yet.
+  const [myWinRound, setMyWinRound] = useState<number>(-1);
 
   const [state, setState] = useState<number | null>(null);
   const [mode, setMode] = useState<'LUCKY_DRAW' | 'AUCTION'>('LUCKY_DRAW');
@@ -90,12 +103,20 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // ~10s, then the UI polls the API every ~10s), so without this the user
   // wouldn't see their own commit/reveal/claim in "Recent activity" for a
   // while. Each entry drops itself once the indexed feed contains its txHash.
-  const [pendingEvents, setPendingEvents] = useState<{ name: string; txHash: string }[]>([]);
+  const [pendingEvents, setPendingEvents] = useState<{ name: string; txHash: string; member?: string }[]>([]);
 
+  // A pending entry is one of the USER'S OWN just-confirmed actions, so its
+  // actor is always this wallet. We record it (as `member`) alongside the name
+  // so the optimistic row reads identically to the indexed one — "You
+  // committed" etc. — with no "syncing" placeholder: we already have the tx
+  // hash (addPendingEvent bails without one), which is the only thing the
+  // indexer would add, so there is nothing to wait for.
   function addPendingEvent(name: string, txHash: string) {
     if (!txHash) return;
     setPendingEvents(prev =>
-      prev.some(p => p.txHash.toLowerCase() === txHash.toLowerCase()) ? prev : [{ name, txHash }, ...prev],
+      prev.some(p => p.txHash.toLowerCase() === txHash.toLowerCase())
+        ? prev
+        : [{ name, txHash, member: userAddress }, ...prev],
     );
   }
 
@@ -115,12 +136,22 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       const memberList = detail.members.map(m => m.address);
       setWonMembers(new Set(detail.members.filter(m => m.hasWon).map(m => m.address.toLowerCase())));
       const stateIdx = STATE_NAMES.indexOf(detail.state as StateName);
-      setState(stateIdx === -1 ? 0 : stateIdx);
+      const apiState = stateIdx === -1 ? 0 : stateIdx;
+      const apiRound = detail.currentRound;
+      // Never let the lagging indexer regress phase/round below what the live
+      // chain read has already confirmed for this round (see liveProgressRef).
+      // A newer round from the API is always accepted (only moves forward).
+      const live = liveProgressRef.current;
+      const apiIsStale =
+        apiRound < live.round || (apiRound === live.round && apiState < live.state);
+      if (!apiIsStale) {
+        setState(apiState);
+        setRound(apiRound);
+      }
       setMode(detail.mode);
       setSeats(detail.seats);
       setContribution(BigInt(detail.contribution));
       setBond(BigInt(detail.bond));
-      setRound(detail.currentRound);
       setMembers(memberList);
       const indexed = (eventsRes.events as { eventName: string; payload: Record<string, unknown>; blockNumber: string; txHash: string }[]).map(e => ({
         name: e.eventName ?? 'Event',
@@ -201,6 +232,35 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         void tryRequestDraw();
       }
 
+      // Live winner detection: hasWon[] is the chain's own record of who has
+      // taken a pot, updated INSIDE the draw tx — so it's true the instant the
+      // draw settles, ~10-20s before the indexed WinnerDrawn event the banner
+      // otherwise waits on. Reading it here lets the winner (and everyone's
+      // member labels) reflect the result immediately. Merged into wonMembers.
+      try {
+        const wonFlags = await Promise.all(
+          memberList.map(m =>
+            publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'hasWon', args: [m] }).catch(() => false),
+          ),
+        );
+        const liveWon = new Set(
+          memberList.filter((_, i) => Boolean(wonFlags[i])).map(m => m.toLowerCase()),
+        );
+        // Union with the API-derived set: never drop a winner the indexer knew
+        // about, never wait for the indexer to learn one chain already shows.
+        setWonMembers(prev => {
+          const merged = new Set(prev);
+          liveWon.forEach(a => merged.add(a));
+          return merged;
+        });
+        // First time we observe THIS user as a winner, stamp the round it
+        // happened in, so the "you won this round" callout can distinguish a
+        // fresh win from the permanent hasWon flag on later rounds.
+        if (userAddress && liveWon.has(userAddress.toLowerCase())) {
+          setMyWinRound(prev => (prev === -1 ? Number(roundVal) : prev));
+        }
+      } catch { /* transient RPC — keep prior wonMembers */ }
+
       let nextCommitOf: string = '0x' + '0'.repeat(64);
       let nextClaimable = 0n;
       let nextBalance = 0n;
@@ -217,6 +277,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         nextClaimable = BigInt((info as any)[3] ?? 0n);
         nextBalance = bal;
         nextRevealed = Boolean(hasRevealed);
+      }
+
+      // Record the furthest-along phase chain has confirmed, so the lagging
+      // indexer path (loadFromApi) can't later regress the UI below it.
+      const liveRound = Number(roundVal);
+      const liveState = Number(stateVal);
+      const prev = liveProgressRef.current;
+      if (liveRound > prev.round || (liveRound === prev.round && liveState > prev.state)) {
+        liveProgressRef.current = { round: liveRound, state: liveState };
       }
 
       // Commit together so the render never mixes a fresh field with a stale one.
@@ -524,8 +593,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   const lastWinnerAddress =
     typeof lastWinnerDrawnEvent?.args.winner === 'string' ? lastWinnerDrawnEvent.args.winner : undefined;
   const lastWinnerTxHash = lastWinnerDrawnEvent?.txHash;
+  // Live winner recognition for THIS user: chain's hasWon[] (read in loadLive,
+  // merged into wonMembers) flips the instant the draw settles, ~10-20s before
+  // the WinnerDrawn event arrives. So the winner sees "that's you" immediately,
+  // not after the indexer catches up. The event still supplies the tx link and
+  // the round label when it lands.
+  const iHaveWonLive = Boolean(userAddress && wonMembers.has(userAddress.toLowerCase()));
   const iAmLastWinner =
-    Boolean(lastWinnerAddress) && userAddress && lastWinnerAddress!.toLowerCase() === userAddress.toLowerCase();
+    (Boolean(lastWinnerAddress) && userAddress && lastWinnerAddress!.toLowerCase() === userAddress.toLowerCase()) ||
+    iHaveWonLive;
   // The winner's payout lands in the SAME wallet they play with — claim() does
   // safeTransfer(msg.sender), and msg.sender is useMember().address. Surface it
   // so the winner knows exactly which address receives the funds.
@@ -567,6 +643,51 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     return stateName;
   })();
 
+  // Turn a raw event (indexed OR the user's own pending copy) into a plain,
+  // human-readable "who did what" line. The actor's address comes from the
+  // event arg that carries it (member/winner/defaulter); we label it with the
+  // member's profile name, or "You" when it's this wallet. Returns null for
+  // events with no meaningful actor line (they just aren't shown).
+  function describeActivity(name: string, args: Record<string, any>): { actor: string; text: string } | null {
+    const actorAddr =
+      (typeof args.member === 'string' && args.member) ||
+      (typeof args.winner === 'string' && args.winner) ||
+      (typeof args.defaulter === 'string' && args.defaulter) ||
+      undefined;
+    const who = actorAddr
+      ? (userAddress && actorAddr.toLowerCase() === userAddress.toLowerCase()
+          ? 'You'
+          : memberLabel(profiles[actorAddr.toLowerCase()], actorAddr))
+      : null;
+    const roundNo = args.round !== undefined && args.round !== null ? Number(args.round) : undefined;
+    const roundSuffix = roundNo !== undefined ? ` round ${roundNo}` : '';
+
+    switch (name) {
+      case 'Joined':
+        return who ? { actor: who, text: `${who} joined the circle` } : null;
+      case 'Committed':
+        return who ? { actor: who, text: `${who} committed${roundSuffix}` } : null;
+      case 'Revealed':
+        return who ? { actor: who, text: `${who} revealed their bid${roundSuffix}` } : null;
+      case 'WinnerDrawn':
+        return who ? { actor: who, text: `${who} won${roundSuffix} 🎉` } : null;
+      case 'Claimed':
+        return who ? { actor: who, text: `${who} claimed their balance` } : null;
+      case 'Slashed':
+        return who ? { actor: who, text: `${who} was slashed for missing the reveal` } : null;
+      case 'RoundStarted':
+        return { actor: '', text: `Round ${roundNo ?? ''} started`.trim() };
+      case 'DrawRequested':
+        return { actor: '', text: `Draw requested${roundSuffix}` };
+      case 'Stalled':
+        return { actor: '', text: `Circle stalled${roundSuffix}` };
+      case 'FillingRefunded':
+        return { actor: '', text: `Circle refunded during filling` };
+      default:
+        return { actor: '', text: name };
+    }
+  }
+
   return (
     <AuthGate
       title={inviteState?.valid ? 'You’re invited — sign in to join' : 'Sign in to join this circle'}
@@ -577,22 +698,35 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       }
     >
     <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-8 sm:pt-10 pb-14">
-      {inviteState && !inviteState.valid && (
-        <div className="text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-2xl px-4 py-3 mb-6">
-          {inviteState.reason === 'full'
-            ? 'This circle is now full — the invite link is no longer active.'
-            : 'This invite link is no longer valid, but you can still view the circle below.'}
-        </div>
-      )}
-      {inviteState?.valid && isMember && (
+      {/* Invite messaging is gated on the ON-CHAIN membership truth (isMember),
+          not just the server's invite status. The server marks a link "full" /
+          invalid once all seats are taken — correct for a STRANGER, but an
+          EXISTING member opening that same link would otherwise be told the
+          "circle is full / link no longer active," which is false for them.
+          So: if you're a member, you ALWAYS get "you're already a member" and
+          never see a full/invalid warning. The invalid/full and "you're
+          invited" banners are shown only to NON-members. `isMember` is derived
+          from the live member list, so this waits for real data (the skeleton
+          gate above ensures state !== null before we render at all). */}
+      {isMember ? (
         <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-2xl px-4 py-3 mb-6">
           You’re already a member of this circle.
         </div>
-      )}
-      {inviteState?.valid && !isMember && (
-        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-2xl px-4 py-3 mb-6">
-          You’ve been invited to this circle. Join below to claim your seat.
-        </div>
+      ) : (
+        <>
+          {inviteState && !inviteState.valid && (
+            <div className="text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-2xl px-4 py-3 mb-6">
+              {inviteState.reason === 'full'
+                ? 'This circle is now full — the invite link is no longer active.'
+                : 'This invite link is no longer valid, but you can still view the circle below.'}
+            </div>
+          )}
+          {inviteState?.valid && (
+            <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-2xl px-4 py-3 mb-6">
+              You’ve been invited to this circle. Join below to claim your seat.
+            </div>
+          )}
+        </>
       )}
 
       {/* Header */}
@@ -714,8 +848,18 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             circle" rather than mislabeling everyone's as "winnings". */}
         {claimable > 0n && (() => {
           const amt = (Number(claimable) / 1e6).toFixed(2);
-          // Fresh "you won" callout only right after this round's draw.
-          const wonThisRound = iAmLastWinner && lastWinnerRound === round;
+          // Fresh "you won" callout right after this round's draw. Trust EITHER
+          // the indexed event (lastWinnerRound === round) OR the live chain flag
+          // (iHaveWonLive), so the winner sees confirmation the moment the draw
+          // settles rather than after the indexer catches up. iHaveWonLive is
+          // true for a past winner in later rounds too, but by then a NEW
+          // WinnerDrawn event for someone else sets lastWinnerRound === round
+          // with a different winner, so this only reads as "you won" while the
+          // winner's own pot is the freshest result — which is exactly the
+          // window we want the callout shown in.
+          const wonThisRound =
+            (iAmLastWinner && lastWinnerRound === round) ||
+            (myWinRound !== -1 && myWinRound === round);
           // Have I EVER won a round? Robust across round changes — a past
           // winner's balance is winnings, not a dividend, even later on.
           const iHaveWon = Boolean(userAddress && wonMembers.has(userAddress.toLowerCase()));
@@ -776,7 +920,14 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )
         ) : stateName === 'COMMIT' ? (
           isMember ? (
-            hasCommitted ? (
+            iHaveWonLive ? (
+              // Past winner ("prized subscriber") — the contract auto-advances
+              // them each round so they never bid again. They still contribute
+              // and share dividends, but take no commit/reveal action.
+              <p className="text-sm text-[#6b6470]">
+                You&rsquo;ve already won a round, so you sit out the bidding from here on — you stay in the circle, keep contributing, and share each round&rsquo;s dividend. Nothing to do this round.
+              </p>
+            ) : hasCommitted ? (
               <p className="text-sm text-[#3a6d4a] font-medium">Committed this round. Wait for the reveal phase.</p>
             ) : (
               <div className="space-y-4">
@@ -830,7 +981,11 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )
         ) : stateName === 'REVEAL' ? (
           isMember ? (
-            revealed ? (
+            iHaveWonLive ? (
+              <p className="text-sm text-[#6b6470]">
+                You&rsquo;ve already won a round, so you sit out the bidding — nothing to reveal. Waiting for the other members, then the draw runs.
+              </p>
+            ) : revealed ? (
               <p className="text-sm text-[#3a6d4a] font-medium">
                 Already revealed. Waiting for everyone else to reveal, then the draw runs.
               </p>
@@ -939,11 +1094,30 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                       </div>
                       <div className="flex gap-2 items-center shrink-0">
                         {isYou && <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-full">You</span>}
-                        {stateName === 'COMMIT' && isYou && (
-                          <span className={`font-mono text-[10px] tracking-[0.12em] uppercase px-2 py-1 rounded-full ${hasCommitted ? 'bg-[#e6efe8] text-[#3a6d4a]' : 'bg-[#efece5] text-[#6b6470]'}`}>
-                            {hasCommitted ? 'Committed' : 'Pending'}
-                          </span>
-                        )}
+                        {(() => {
+                          // A past winner is auto-marked committed+revealed by the
+                          // contract at each new round start (Circle.sol excludes
+                          // "prized subscribers" from bidding). Showing them as
+                          // "Committed" reads as an action they never took — label
+                          // it "Won" so it's clear they're sitting the round out,
+                          // not that the next round somehow started on their behalf.
+                          const memberWon = wonMembers.has(m.toLowerCase());
+                          if (memberWon) {
+                            return (
+                              <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-full">
+                                Won · sitting out
+                              </span>
+                            );
+                          }
+                          if (stateName === 'COMMIT' && isYou) {
+                            return (
+                              <span className={`font-mono text-[10px] tracking-[0.12em] uppercase px-2 py-1 rounded-full ${hasCommitted ? 'bg-[#e6efe8] text-[#3a6d4a]' : 'bg-[#efece5] text-[#6b6470]'}`}>
+                                {hasCommitted ? 'Committed' : 'Pending'}
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     </li>
                   );
@@ -956,36 +1130,43 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           {(events.length > 0 || pendingEvents.length > 0) && (
             <div className="rounded-2xl bg-white shadow-sm p-6">
               <Eyebrow muted>Recent activity</Eyebrow>
-              <ul className="space-y-2 mt-4">
-                {/* Optimistic entries for the user's own just-confirmed actions,
-                    shown instantly while the indexer catches up (up to ~20s). */}
-                {pendingEvents.map(ev => (
-                  <li key={ev.txHash} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
-                    <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-[#c9a15c] border-t-transparent animate-spin" />
-                    <span>{ev.name}</span>
-                    <span className="text-[10px] uppercase tracking-wider text-[#c9a15c]/70">syncing…</span>
-                    {ev.txHash && (
-                      <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors" title="View transaction on explorer">↗</a>
-                    )}
-                  </li>
-                ))}
-                {events.map((ev, i) => (
-                  <li key={ev.txHash || i} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
-                    <span className="text-[#c9a15c]">[{ev.blockNumber.toString()}]</span>
-                    <span>{ev.name}</span>
-                    {ev.txHash && (
-                      <a
-                        href={txUrl(ev.txHash)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[#6b6470] hover:text-[#c9a15c] transition-colors"
-                        title="View transaction on explorer"
-                      >
-                        ↗
-                      </a>
-                    )}
-                  </li>
-                ))}
+              <ul className="space-y-2.5 mt-4">
+                {/* The user's OWN just-confirmed actions render INSTANTLY as
+                    finished rows — no "syncing" spinner. We already hold the tx
+                    hash (the only thing the indexer would add), so there is
+                    nothing to wait for. Each de-dupes itself once the indexed
+                    copy arrives (loadFromApi drops it by txHash). */}
+                {pendingEvents.map(ev => {
+                  const d = describeActivity(ev.name, { member: ev.member });
+                  return (
+                    <li key={ev.txHash} className="text-sm text-[#3f3a46] flex gap-2 items-center justify-between">
+                      <span className="min-w-0 truncate">{d?.text ?? ev.name}</span>
+                      {ev.txHash && (
+                        <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0" title="View transaction on explorer">↗</a>
+                      )}
+                    </li>
+                  );
+                })}
+                {events.map((ev, i) => {
+                  const d = describeActivity(ev.name, ev.args);
+                  if (!d) return null;
+                  return (
+                    <li key={ev.txHash || i} className="text-sm text-[#3f3a46] flex gap-2 items-center justify-between">
+                      <span className="min-w-0 truncate">{d.text}</span>
+                      {ev.txHash && (
+                        <a
+                          href={txUrl(ev.txHash)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0"
+                          title="View transaction on explorer"
+                        >
+                          ↗
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
