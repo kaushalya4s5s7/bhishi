@@ -1,8 +1,8 @@
 import { BadRequestException, Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { AuthedRequest, PrivyAuthGuard } from '../auth/privy-auth.guard';
-import { CreateInvitesDto } from './dto/create-invites.dto';
-import { InvitesService } from './invites.service';
+import { AuthedRequest, PrivyAuthGuard } from '../auth/privy-auth.guard.js';
+import { CreateInvitesDto } from './dto/create-invites.dto.js';
+import { InvitesService } from './invites.service.js';
 
 @Controller('invites')
 export class InvitesController {

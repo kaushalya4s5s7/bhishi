@@ -1,8 +1,8 @@
 import { BadRequestException, Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { PrivyAuthGuard, AuthedRequest } from '../auth/privy-auth.guard';
-import { TransactionsService } from './transactions.service';
-import { ConfirmTransactionDto } from './dto/confirm-transaction.dto';
+import { PrivyAuthGuard, AuthedRequest } from '../auth/privy-auth.guard.js';
+import { TransactionsService } from './transactions.service.js';
+import { ConfirmTransactionDto } from './dto/confirm-transaction.dto.js';
 
 @Controller('transactions')
 @UseGuards(PrivyAuthGuard)

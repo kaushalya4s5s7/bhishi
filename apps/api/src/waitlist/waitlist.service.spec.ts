@@ -1,10 +1,11 @@
+import { jest } from '@jest/globals';
 import { Test } from '@nestjs/testing';
-import { PrismaService } from '../prisma/prisma.service';
-import { WaitlistService } from './waitlist.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { WaitlistService } from './waitlist.service.js';
 
 describe('WaitlistService', () => {
   let service: WaitlistService;
-  const upsert = jest.fn();
+  const upsert = jest.fn<(...args: any[]) => any>();
 
   beforeEach(async () => {
     upsert.mockReset().mockResolvedValue({ id: 'entry_1' });

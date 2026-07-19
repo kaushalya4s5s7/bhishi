@@ -1,8 +1,8 @@
 import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { AuthedRequest, PrivyAuthGuard } from '../auth/privy-auth.guard';
-import { IsEthAddressPipe } from '../common/is-eth-address.pipe';
-import { ProfilesService } from './profiles.service';
-import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AuthedRequest, PrivyAuthGuard } from '../auth/privy-auth.guard.js';
+import { IsEthAddressPipe } from '../common/is-eth-address.pipe.js';
+import { ProfilesService } from './profiles.service.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
 
 @Controller('profiles')
 export class ProfilesController {

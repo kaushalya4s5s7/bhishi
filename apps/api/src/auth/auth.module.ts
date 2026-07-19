@@ -1,6 +1,6 @@
 import { Global, Module } from '@nestjs/common';
-import { PrivyService } from './privy.service';
-import { OptionalPrivyAuthGuard, PrivyAuthGuard } from './privy-auth.guard';
+import { PrivyService } from './privy.service.js';
+import { OptionalPrivyAuthGuard, PrivyAuthGuard } from './privy-auth.guard.js';
 
 @Global()
 @Module({

@@ -119,7 +119,7 @@ jobs:
         run: pnpm exec tsc --noEmit
 
       - name: Test
-        run: pnpm exec jest
+        run: pnpm run test
 
       - name: Build
         run: pnpm exec nest build

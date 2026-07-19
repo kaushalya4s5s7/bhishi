@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Request } from 'express';
-import { PrivyService, VerifiedUser } from './privy.service';
+import { PrivyService, VerifiedUser } from './privy.service.js';
 
 export interface AuthedRequest extends Request {
   user?: VerifiedUser;

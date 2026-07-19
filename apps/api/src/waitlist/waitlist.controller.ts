@@ -1,8 +1,8 @@
 import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { AuthedRequest, OptionalPrivyAuthGuard } from '../auth/privy-auth.guard';
-import { CreateWaitlistEntryDto } from './dto/create-waitlist-entry.dto';
-import { WaitlistService } from './waitlist.service';
+import { AuthedRequest, OptionalPrivyAuthGuard } from '../auth/privy-auth.guard.js';
+import { CreateWaitlistEntryDto } from './dto/create-waitlist-entry.dto.js';
+import { WaitlistService } from './waitlist.service.js';
 
 @Controller('waitlist')
 export class WaitlistController {

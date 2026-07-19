@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service.js';
 
 /** Token amounts are Decimal in the DB; serialise as strings so a JS client
  *  never silently loses precision on a big value. */

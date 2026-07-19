@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { SponsorController } from './sponsor.controller';
-import { SponsorService } from './sponsor.service';
+import { SponsorController } from './sponsor.controller.js';
+import { SponsorService } from './sponsor.service.js';
 
 @Module({
   controllers: [SponsorController],

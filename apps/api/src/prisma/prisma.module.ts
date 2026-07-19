@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { PrismaService } from './prisma.service';
+import { PrismaService } from './prisma.service.js';
 
 /** Global so feature modules don't each re-import it (arch-module-sharing). */
 @Global()

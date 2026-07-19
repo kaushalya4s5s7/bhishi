@@ -2,13 +2,14 @@
   "name": "@bhishi/api",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",
     "dev": "nest start --watch",
     "typecheck": "tsc --noEmit",
-    "test": "jest",
-    "test:e2e": "jest --config test/jest-e2e.json"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:e2e": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config test/jest-e2e.json"
   },
   "dependencies": {
     "@bhishi/db": "workspace:*",
@@ -31,6 +32,7 @@
     "viem": "^2.55.2"
   },
   "devDependencies": {
+    "@jest/globals": "^29.7.0",
     "@nestjs/cli": "^10.4.9",
     "@nestjs/testing": "^10.4.15",
     "@types/express": "^5.0.0",
@@ -43,6 +45,7 @@
     "typescript": "^5.0.0"
   },
   "jest": {
+    "injectGlobals": true,
     "moduleFileExtensions": [
       "js",
       "json",
@@ -50,14 +53,23 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "useESM": true
+        }
+      ]
     },
     "testEnvironment": "node",
     "moduleNameMapper": {
       "^@bhishi/db$": "<rootDir>/../../../packages/db/src/index.ts",
       "^@bhishi/events$": "<rootDir>/../../../packages/events/src/index.ts",
-      "^@bhishi/shared$": "<rootDir>/../../../packages/shared/src/index.ts"
+      "^@bhishi/shared$": "<rootDir>/../../../packages/shared/src/index.ts",
+      "^(\\.{1,2}/.*)\\.js$": "$1"
     }
   }
 }

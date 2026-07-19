@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
-import { CreateInvitesDto } from './dto/create-invites.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { EmailService } from '../email/email.service.js';
+import { CreateInvitesDto } from './dto/create-invites.dto.js';
 
 type InvalidReason = 'unknown' | 'revoked' | 'full';
 

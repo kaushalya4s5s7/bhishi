@@ -1,17 +1,18 @@
+import { jest } from '@jest/globals';
 import { ForbiddenException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from '../email/email.service';
-import { InvitesService } from './invites.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { EmailService } from '../email/email.service.js';
+import { InvitesService } from './invites.service.js';
 
 describe('InvitesService', () => {
-  const circleFindUnique = jest.fn();
-  const memberCount = jest.fn();
-  const inviteFindUnique = jest.fn();
-  const inviteUpsert = jest.fn();
-  const inviteUpdate = jest.fn();
-  const sendCircleInvite = jest.fn();
+  const circleFindUnique = jest.fn<(...args: any[]) => any>();
+  const memberCount = jest.fn<(...args: any[]) => any>();
+  const inviteFindUnique = jest.fn<(...args: any[]) => any>();
+  const inviteUpsert = jest.fn<(...args: any[]) => any>();
+  const inviteUpdate = jest.fn<(...args: any[]) => any>();
+  const sendCircleInvite = jest.fn<(...args: any[]) => any>();
 
   async function make() {
     const moduleRef = await Test.createTestingModule({
@@ -66,11 +67,11 @@ describe('InvitesService', () => {
     expect(res.invited).toHaveLength(2);
 
     // Each upsert is keyed on the unique constraint (circleAddress, kind, email).
-    const linkCall = inviteUpsert.mock.calls.find((c: any) => c[0].create.kind === 'LINK')[0];
+    const linkCall = inviteUpsert.mock.calls.find((c: any) => c[0].create.kind === 'LINK')![0];
     expect(linkCall.where).toEqual({
       circleAddress_kind_email: { circleAddress: '0xcircle', kind: 'LINK', email: '' },
     });
-    const emailCall = inviteUpsert.mock.calls.find((c: any) => c[0].create.email === 'a@b.com')[0];
+    const emailCall = inviteUpsert.mock.calls.find((c: any) => c[0].create.email === 'a@b.com')![0];
     expect(emailCall.where).toEqual({
       circleAddress_kind_email: { circleAddress: '0xcircle', kind: 'EMAIL', email: 'a@b.com' },
     });

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createPublicClient, http, parseAbiItem, parseEventLogs, type Log, type PublicClient } from 'viem';
 import { circleAbi, addresses } from '@bhishi/shared';
 import { prisma } from '@bhishi/db';
-import { ConfirmableAction } from './dto/confirm-transaction.dto';
+import { ConfirmableAction } from './dto/confirm-transaction.dto.js';
 
 type AnyLog = Log & { eventName?: string; args?: Record<string, unknown> };
 

@@ -1,6 +1,6 @@
 import { BadRequestException, Controller, Get, Param, Query } from '@nestjs/common';
-import { CirclesService } from './circles.service';
-import { IsEthAddressPipe } from '../common/is-eth-address.pipe';
+import { CirclesService } from './circles.service.js';
+import { IsEthAddressPipe } from '../common/is-eth-address.pipe.js';
 
 /**
  * Indexed read API — serves from Postgres instead of making every browser

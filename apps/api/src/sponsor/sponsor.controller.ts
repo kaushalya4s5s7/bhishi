@@ -1,8 +1,8 @@
 import { BadRequestException, Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { AuthedRequest, PrivyAuthGuard } from '../auth/privy-auth.guard';
-import { FundCreateDto } from './dto/fund-create.dto';
-import { SponsorService } from './sponsor.service';
+import { AuthedRequest, PrivyAuthGuard } from '../auth/privy-auth.guard.js';
+import { FundCreateDto } from './dto/fund-create.dto.js';
+import { SponsorService } from './sponsor.service.js';
 
 @Controller('sponsor')
 export class SponsorController {

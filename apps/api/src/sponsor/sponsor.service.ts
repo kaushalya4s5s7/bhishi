@@ -15,7 +15,7 @@ import {
   type WalletClient,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service.js';
 
 // Inlined rather than imported from @bhishi/shared: that package uses JSON
 // import assertions which don't compile under this API's tsconfig `module`

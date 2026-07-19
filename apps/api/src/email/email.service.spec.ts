@@ -1,11 +1,12 @@
+import { jest } from '@jest/globals';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../prisma/prisma.service';
-import { EmailService } from './email.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { EmailService } from './email.service.js';
 
 describe('EmailService', () => {
-  const create = jest.fn();
-  let logSpy: jest.SpyInstance;
+  const create = jest.fn<(...args: any[]) => any>();
+  let logSpy: ReturnType<typeof jest.spyOn>;
 
   async function make(config: Record<string, string | undefined>) {
     create.mockReset().mockResolvedValue({ id: 'log_1' });

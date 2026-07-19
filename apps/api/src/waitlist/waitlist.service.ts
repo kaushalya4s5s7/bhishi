@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateWaitlistEntryDto } from './dto/create-waitlist-entry.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreateWaitlistEntryDto } from './dto/create-waitlist-entry.dto.js';
 
 @Injectable()
 export class WaitlistService {
