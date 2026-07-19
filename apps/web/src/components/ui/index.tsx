@@ -8,6 +8,33 @@ export function Eyebrow({ children, muted = false }: { children: ReactNode; mute
   return <p className={`eyebrow ${muted ? 'eyebrow-muted' : ''}`}>{children}</p>;
 }
 
+/** DiceBear (https://www.dicebear.com) avatar URL, seeded so the same wallet
+ *  address or profile always renders the same generated avatar rather than a
+ *  new random one on every load. `adventurer` draws an actual illustrated
+ *  cartoon character (hair, face, expression) rather than an abstract shape;
+ *  swap the style segment to change the whole product's avatar look in one
+ *  place. */
+export function diceBearUrl(seed: string, style: string = 'adventurer') {
+  return `https://api.dicebear.com/9.x/${style}/svg?seed=${encodeURIComponent(seed)}&backgroundColor=f0ede4,e4e9fb,f6e3d5,dcefe8`;
+}
+
+/** Circular avatar: a profile's custom avatarUrl if set, else a DiceBear avatar
+ *  generated deterministically from `seed` (wallet address / member key). */
+export function Avatar({ seed, avatarUrl, size = 40, className = '' }: { seed: string; avatarUrl?: string | null; size?: number; className?: string }) {
+  const src = avatarUrl || diceBearUrl(seed);
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      width={size}
+      height={size}
+      className={`rounded-full object-cover ${className}`}
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
 /** Dashed ledger rule — the accounting-book divider. */
 export function LedgerRule({ className = '' }: { className?: string }) {
   return <div className={`ledger-rule text-[#6b6470] ${className}`} aria-hidden />;

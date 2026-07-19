@@ -4,7 +4,7 @@ import { usePrivy } from '@privy-io/react-auth';
 import { useMember } from '@/lib/member';
 import { claimFaucet } from '@/lib/faucet';
 import { stableBalance } from '@/lib/erc20';
-import { Button, Card, Eyebrow } from '@/components/ui';
+import { Button, Eyebrow } from '@/components/ui';
 
 /**
  * Test-funds faucet. `variant="card"` is the full panel for the /faucet page;
@@ -78,33 +78,47 @@ export function Faucet({ variant = 'card' }: { variant?: 'card' | 'inline' }) {
   }
 
   return (
-    <Card className="p-7">
-      <Eyebrow>Testnet faucet</Eyebrow>
-      <h2 className="font-display font-semibold text-2xl mt-3">Get test mUSDC</h2>
-      <p className="text-[#6b6470] text-sm mt-2 leading-relaxed">
-        Bhishi runs on Monad testnet with a mock stablecoin. Claim 500 mUSDC to join or start a
-        circle. You can claim again once every 24 hours.
-      </p>
+    <div className="rounded-[28px] shadow-sm p-8 relative overflow-hidden" style={{ background: 'linear-gradient(160deg, #fbead0, #fff8ec 55%, #f6e9d2)' }}>
+      {/* Drip motif — soft brass droplets trailing off the top-right corner */}
+      <div className="pointer-events-none absolute -top-6 -right-6 opacity-70" aria-hidden>
+        <div className="w-28 h-28 rounded-full bg-[#c9a15c]/25 blur-xl" />
+      </div>
+      <div className="pointer-events-none absolute top-16 right-14 w-3 h-3 rounded-full bg-[#c9a15c]/40" aria-hidden />
+      <div className="pointer-events-none absolute top-28 right-24 w-2 h-2 rounded-full bg-[#c9a15c]/30" aria-hidden />
 
-      <div className="mt-6 flex items-end justify-between gap-4">
-        <div>
-          <div className="text-xs text-[#6b6470]">Your balance</div>
-          <div className="font-display font-semibold text-3xl mt-1">
-            {balanceStr} <span className="text-base text-[#6b6470] font-sans font-medium">mUSDC</span>
+      <div className="relative">
+        <Eyebrow>Testnet faucet</Eyebrow>
+        <h2 className="font-display font-semibold text-2xl mt-3">Get test mUSDC</h2>
+        <p className="text-[#6b6470] text-sm mt-2 leading-relaxed max-w-sm">
+          Bhishi runs on Monad testnet with a mock stablecoin. Claim 500 mUSDC to join or start a
+          circle. You can claim again once every 24 hours.
+        </p>
+
+        <div className="mt-8 flex items-center gap-6 flex-wrap">
+          {/* Balance dial */}
+          <div className="w-32 h-32 rounded-full bg-white shadow-sm grid place-items-center shrink-0 border-4 border-[#c9a15c]/30">
+            <div className="text-center">
+              <div className="font-display font-semibold text-xl leading-none">{balanceStr}</div>
+              <div className="text-[10px] text-[#6b6470] uppercase tracking-wide mt-1">mUSDC</div>
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-[160px]">
+            <div className="text-xs text-[#6b6470] mb-3">Wallet balance</div>
+            <Button variant="brass" onClick={claim} disabled={disabled}>
+              {pending ? 'Claiming…' : walletResolving ? 'Preparing wallet…' : 'Claim 500 mUSDC'}
+            </Button>
           </div>
         </div>
-        <Button variant="brass" onClick={claim} disabled={disabled}>
-          {pending ? 'Claiming…' : walletResolving ? 'Preparing wallet…' : 'Claim 500 mUSDC'}
-        </Button>
-      </div>
 
-      {msg && (
-        <p className={`mt-4 text-sm rounded-sm px-3 py-2 ${
-          msg.kind === 'ok' ? 'bg-[#e6efe8] text-[#3a6d4a]' : 'bg-[#f3e3e0] text-[#9a4a3a]'
-        }`}>
-          {msg.text}
-        </p>
-      )}
-    </Card>
+        {msg && (
+          <p className={`mt-5 text-sm rounded-xl px-3 py-2.5 ${
+            msg.kind === 'ok' ? 'bg-[#e6efe8] text-[#3a6d4a]' : 'bg-[#f3e3e0] text-[#9a4a3a]'
+          }`}>
+            {msg.text}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

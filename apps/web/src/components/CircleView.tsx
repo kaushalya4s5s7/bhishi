@@ -16,7 +16,7 @@ import { validateInvite, consumeInvite, type ValidateResult } from '@/lib/invite
 import { fetchProfile, memberLabel, type UserProfile } from '@/lib/profile';
 import { AuthGate } from '@/components/AuthGate';
 import { InvitePanel } from '@/components/InvitePanel';
-import { Button, Card, Eyebrow, PhaseBadge, SeatRing, SectionLabel, truncate } from '@/components/ui';
+import { Avatar, Button, Eyebrow, PhaseBadge, SeatRing, truncate } from '@/components/ui';
 
 const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
 type StateName = typeof STATE_NAMES[number];
@@ -459,10 +459,10 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // user sees already carries real values, never the zero defaults.
   if (loading || state === null) {
     return (
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-12 animate-pulse space-y-4">
-        <div className="h-8 bg-white/60 border border-[#e6e2d9] rounded-sm w-60" />
-        <div className="h-40 bg-white/60 border border-[#e6e2d9] rounded-sm" />
-        <div className="h-40 bg-white/60 border border-[#e6e2d9] rounded-sm" />
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-8 sm:pt-10 pb-14 animate-pulse space-y-4">
+        <div className="h-8 bg-white/60 rounded-full w-60" />
+        <div className="h-40 bg-white/60 rounded-2xl" />
+        <div className="h-40 bg-white/60 rounded-2xl" />
       </div>
     );
   }
@@ -525,26 +525,27 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           : "You'll need a wallet to join, commit, and claim. Signing in creates one for you."
       }
     >
-    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10 sm:py-14 space-y-6">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-8 sm:pt-10 pb-14">
       {inviteState && !inviteState.valid && (
-        <div className="text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-sm px-4 py-3">
+        <div className="text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-2xl px-4 py-3 mb-6">
           {inviteState.reason === 'full'
             ? 'This circle is now full — the invite link is no longer active.'
             : 'This invite link is no longer valid, but you can still view the circle below.'}
         </div>
       )}
       {inviteState?.valid && isMember && (
-        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-sm px-4 py-3">
+        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-2xl px-4 py-3 mb-6">
           You’re already a member of this circle.
         </div>
       )}
       {inviteState?.valid && !isMember && (
-        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-sm px-4 py-3">
+        <div className="text-sm text-[#3a6d4a] bg-[#e6efe8] border border-[#cfe0d3] rounded-2xl px-4 py-3 mb-6">
           You’ve been invited to this circle. Join below to claim your seat.
         </div>
       )}
+
       {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-4 mt-10">
+      <div className="flex items-start justify-between flex-wrap gap-4 mb-6">
         <div>
           <div className="flex items-center gap-3">
             <Eyebrow>Circle</Eyebrow>
@@ -558,95 +559,71 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             {round > 0 && <span className="font-mono text-xs text-[#6b6470]">Round {round}</span>}
           </div>
         </div>
-        <button onClick={() => refresh()} className="text-sm text-[#6b6470] hover:text-[#0b0b0e] border border-[#e6e2d9] hover:border-[#0b0b0e] px-3 py-1.5 rounded-sm transition-colors">
+        <button onClick={() => refresh()} className="text-sm text-[#6b6470] hover:text-[#0b0b0e] border border-[#e6e2d9] hover:border-[#0b0b0e] px-3 py-1.5 rounded-full transition-colors bg-white shadow-sm">
           Refresh
         </button>
       </div>
 
-      {/* Last winner — persistent, so it isn't buried once a new round starts */}
-      {lastWinnerAddress && (
-        <div className="text-sm bg-[#f0ead8]/50 border border-[#e6e2d9] rounded-sm px-4 py-3 space-y-1.5">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <span className="text-[#6b6470]">
-              Round {lastWinnerRound} winner:{' '}
-              <span className="text-[#0b0b0e] font-medium">
-                {memberLabel(profiles[lastWinnerAddress.toLowerCase()], lastWinnerAddress)}
-              </span>
-              {iAmLastWinner && <span className="text-[#c9a15c] font-semibold"> — that&rsquo;s you!</span>}
-            </span>
-            {lastWinnerTxHash && (
-              <a
-                href={txUrl(lastWinnerTxHash)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-xs text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70"
-              >
-                View draw tx ↗
-              </a>
-            )}
-          </div>
-          {iAmLastWinner && (
-            <p className="text-xs text-[#6b6470]">
-              The pot is paid in mUSDC to your wallet{' '}
-              <span className="font-mono text-[#0b0b0e]">{truncate(userAddress!)}</span> — the same address you play with.
-              {myClaimTxHash ? (
-                <>
-                  {' '}Claimed:{' '}
-                  <a href={txUrl(myClaimTxHash)} target="_blank" rel="noopener noreferrer" className="text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70">
-                    view claim tx ↗
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6">
+        {/* Main column */}
+        <div className="min-w-0 space-y-6">
+          {/* Last winner — persistent, so it isn't buried once a new round starts */}
+          {lastWinnerAddress && (
+            <div className="text-sm rounded-2xl px-5 py-4 space-y-1.5 shadow-sm" style={{ background: 'linear-gradient(135deg, #f6e3d5, #f0ead8)' }}>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-[#6b6470]">
+                  Round {lastWinnerRound} winner:{' '}
+                  <span className="text-[#0b0b0e] font-medium">
+                    {memberLabel(profiles[lastWinnerAddress.toLowerCase()], lastWinnerAddress)}
+                  </span>
+                  {iAmLastWinner && <span className="text-[#c9a15c] font-semibold"> — that&rsquo;s you!</span>}
+                </span>
+                {lastWinnerTxHash && (
+                  <a
+                    href={txUrl(lastWinnerTxHash)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-xs text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70"
+                  >
+                    View draw tx ↗
                   </a>
-                </>
-              ) : (
-                <> Use the “Claim balance” action below to pull it in.</>
+                )}
+              </div>
+              {iAmLastWinner && (
+                <p className="text-xs text-[#6b6470]">
+                  The pot is paid in mUSDC to your wallet{' '}
+                  <span className="font-mono text-[#0b0b0e]">{truncate(userAddress!)}</span> — the same address you play with.
+                  {myClaimTxHash ? (
+                    <>
+                      {' '}Claimed:{' '}
+                      <a href={txUrl(myClaimTxHash)} target="_blank" rel="noopener noreferrer" className="text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70">
+                        view claim tx ↗
+                      </a>
+                    </>
+                  ) : (
+                    <> Use the “Claim balance” action below to pull it in.</>
+                  )}
+                </p>
               )}
-            </p>
+            </div>
           )}
-        </div>
-      )}
 
-      {/* Seats */}
-      <Card className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <Eyebrow muted>Seats</Eyebrow>
-          <span className="font-mono text-xs text-[#6b6470]">{members.length} / {seats}</span>
-        </div>
-        <SeatRing filled={members.length} total={seats} />
-        <div className="mt-4 text-sm text-[#6b6470]">
-          Contribution <span className="font-medium text-[#0b0b0e]">{(Number(contribution) / 1e6).toFixed(2)} mUSDC</span> / round
-        </div>
-      </Card>
+          {/* Seats */}
+          <div className="rounded-2xl bg-white shadow-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <Eyebrow muted>Seats</Eyebrow>
+              <span className="font-mono text-xs text-[#6b6470]">{members.length} / {seats}</span>
+            </div>
+            <SeatRing filled={members.length} total={seats} />
+            <div className="mt-4 text-sm text-[#6b6470]">
+              Contribution <span className="font-medium text-[#0b0b0e]">{(Number(contribution) / 1e6).toFixed(2)} mUSDC</span> / round
+            </div>
+          </div>
 
-      {stateName === 'FILLING' && <InvitePanel circleAddress={circleAddress} />}
+          {stateName === 'FILLING' && <InvitePanel circleAddress={circleAddress} />}
 
-      {/* Members */}
-      <div>
-        <SectionLabel>Members</SectionLabel>
-        {members.length === 0 ? (
-          <p className="text-sm text-[#6b6470]">No members yet.</p>
-        ) : (
-          <ul className="space-y-2">
-            {members.map((m, i) => {
-              const isYou = m.toLowerCase() === userAddress?.toLowerCase();
-              return (
-                <li key={i} className="flex items-center justify-between text-sm border border-[#e6e2d9] rounded-sm px-3 py-2.5 bg-white">
-                  <span className="text-[#0b0b0e]">{memberLabel(profiles[m.toLowerCase()], m)}</span>
-                  <div className="flex gap-2 items-center">
-                    {isYou && <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-sm">You</span>}
-                    {stateName === 'COMMIT' && isYou && (
-                      <span className={`font-mono text-[10px] tracking-[0.12em] uppercase px-2 py-1 rounded-sm ${hasCommitted ? 'bg-[#e6efe8] text-[#3a6d4a]' : 'bg-[#efece5] text-[#6b6470]'}`}>
-                        {hasCommitted ? 'Committed' : 'Pending'}
-                      </span>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      {/* Phase action panel */}
-      <Card className="p-6">
+          {/* Phase action panel */}
+          <div className="rounded-2xl bg-white shadow-sm p-6">
         <div className="flex items-center justify-between mb-4">
           <Eyebrow muted>Your turn</Eyebrow>
           {userAddress && (
@@ -865,49 +842,87 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         )}
 
         {txError && (
-          <div className="mt-4 text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-sm px-3 py-2.5">
+          <div className="mt-4 text-sm text-[#9a4a3a] bg-[#f3e3e0] border border-[#e8cfc9] rounded-2xl px-3 py-2.5">
             {txError}
           </div>
         )}
-      </Card>
-
-      {/* Event feed */}
-      {(events.length > 0 || pendingEvents.length > 0) && (
-        <div>
-          <SectionLabel>Recent activity</SectionLabel>
-          <ul className="space-y-1.5">
-            {/* Optimistic entries for the user's own just-confirmed actions,
-                shown instantly while the indexer catches up (up to ~20s). */}
-            {pendingEvents.map(ev => (
-              <li key={ev.txHash} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
-                <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-[#c9a15c] border-t-transparent animate-spin" />
-                <span>{ev.name}</span>
-                <span className="text-[10px] uppercase tracking-wider text-[#c9a15c]/70">syncing…</span>
-                {ev.txHash && (
-                  <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors" title="View transaction on explorer">↗</a>
-                )}
-              </li>
-            ))}
-            {events.map((ev, i) => (
-              <li key={ev.txHash || i} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
-                <span className="text-[#c9a15c]">[{ev.blockNumber.toString()}]</span>
-                <span>{ev.name}</span>
-                {ev.txHash && (
-                  <a
-                    href={txUrl(ev.txHash)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#6b6470] hover:text-[#c9a15c] transition-colors"
-                    title="View transaction on explorer"
-                  >
-                    ↗
-                  </a>
-                )}
-              </li>
-            ))}
-          </ul>
+          </div>
         </div>
-      )}
+
+        {/* Right rail */}
+        <div className="space-y-6">
+          {/* Members */}
+          <div className="rounded-2xl bg-white shadow-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <Eyebrow muted>Members</Eyebrow>
+              <span className="font-mono text-xs text-[#6b6470]">{members.length} / {seats}</span>
+            </div>
+            {members.length === 0 ? (
+              <p className="text-sm text-[#6b6470]">No members yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {members.map((m, i) => {
+                  const isYou = m.toLowerCase() === userAddress?.toLowerCase();
+                  return (
+                    <li key={i} className="flex items-center justify-between text-sm rounded-xl px-3 py-2.5 bg-[#f6f4ee]">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <Avatar seed={m} avatarUrl={profiles[m.toLowerCase()]?.avatarUrl} size={28} />
+                        <span className="text-[#0b0b0e] truncate">{memberLabel(profiles[m.toLowerCase()], m)}</span>
+                      </div>
+                      <div className="flex gap-2 items-center shrink-0">
+                        {isYou && <span className="font-mono text-[10px] tracking-[0.12em] uppercase bg-[#f0ead8] text-[#8a6d2f] px-2 py-1 rounded-full">You</span>}
+                        {stateName === 'COMMIT' && isYou && (
+                          <span className={`font-mono text-[10px] tracking-[0.12em] uppercase px-2 py-1 rounded-full ${hasCommitted ? 'bg-[#e6efe8] text-[#3a6d4a]' : 'bg-[#efece5] text-[#6b6470]'}`}>
+                            {hasCommitted ? 'Committed' : 'Pending'}
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* Event feed */}
+          {(events.length > 0 || pendingEvents.length > 0) && (
+            <div className="rounded-2xl bg-white shadow-sm p-6">
+              <Eyebrow muted>Recent activity</Eyebrow>
+              <ul className="space-y-2 mt-4">
+                {/* Optimistic entries for the user's own just-confirmed actions,
+                    shown instantly while the indexer catches up (up to ~20s). */}
+                {pendingEvents.map(ev => (
+                  <li key={ev.txHash} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
+                    <span className="inline-block h-2.5 w-2.5 rounded-full border-2 border-[#c9a15c] border-t-transparent animate-spin" />
+                    <span>{ev.name}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-[#c9a15c]/70">syncing…</span>
+                    {ev.txHash && (
+                      <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors" title="View transaction on explorer">↗</a>
+                    )}
+                  </li>
+                ))}
+                {events.map((ev, i) => (
+                  <li key={ev.txHash || i} className="text-xs text-[#6b6470] font-mono flex gap-3 items-center">
+                    <span className="text-[#c9a15c]">[{ev.blockNumber.toString()}]</span>
+                    <span>{ev.name}</span>
+                    {ev.txHash && (
+                      <a
+                        href={txUrl(ev.txHash)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#6b6470] hover:text-[#c9a15c] transition-colors"
+                        title="View transaction on explorer"
+                      >
+                        ↗
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
     </AuthGate>
   );

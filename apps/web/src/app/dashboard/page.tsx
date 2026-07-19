@@ -4,7 +4,7 @@ import { CircleCard, type CircleSummary } from '@/components/CircleCard';
 import { CreateWizard } from '@/components/CreateWizard';
 import { AuthGate } from '@/components/AuthGate';
 import { Faucet } from '@/components/Faucet';
-import { Button, Eyebrow, Seal } from '@/components/ui';
+import { Avatar, Button, Eyebrow, Seal } from '@/components/ui';
 import { useProfile } from '@/lib/profile';
 import { useMember } from '@/lib/member';
 import { apiUrl } from '@/lib/api';
@@ -45,7 +45,6 @@ export default function DashboardPage() {
   }, [fetchCircles]);
 
   const displayName = profile?.displayName || profile?.email || (userAddress ? `${userAddress.slice(0, 6)}…${userAddress.slice(-4)}` : 'there');
-  const initial = displayName.trim().charAt(0).toUpperCase() || 'B';
 
   const filteredCircles = useMemo(() => {
     if (!query.trim()) return circles;
@@ -75,7 +74,7 @@ export default function DashboardPage() {
   );
 
   return (
-    <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-24 sm:pt-28 pb-14">
+    <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-8 sm:pt-10 pb-14">
       <AuthGate
         title="Sign in to see your circles"
         blurb="View the circles you're in, start a new one, and claim test funds — all from here."
@@ -111,9 +110,9 @@ export default function DashboardPage() {
               <div className="bg-white rounded-2xl p-6 flex flex-col items-center text-center shadow-sm">
                 <div className="relative mb-4">
                   <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#c9a15c] to-[#e7c98a] p-[3px]">
-                    <div className="w-full h-full rounded-full bg-[#0b0b0e] text-[#faf9f6] grid place-items-center font-display font-semibold text-3xl">
-                      {initial}
-                    </div>
+                    {userAddress && (
+                      <Avatar key={userAddress} seed={userAddress} avatarUrl={profile?.avatarUrl} size={90} className="border-2 border-[#faf9f6]" />
+                    )}
                   </div>
                 </div>
                 <p className="font-display font-semibold text-lg truncate max-w-full">{displayName}</p>
@@ -296,20 +295,26 @@ export default function DashboardPage() {
       {/* Create modal */}
       {showCreate && (
         <div
-          className="fixed inset-0 z-[200] bg-[#0b0b0e]/60 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-[200] bg-[#0b0b0e]/50 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={e => { if (e.target === e.currentTarget) setShowCreate(false); }}
         >
-          <div className="bg-[#faf9f6] rounded-2xl border border-[#e6e2d9] shadow-2xl p-7 w-full max-w-md relative max-h-[90vh] overflow-y-auto">
-            <button
-              onClick={() => setShowCreate(false)}
-              aria-label="Close"
-              className="absolute top-4 right-4 text-[#6b6470] hover:text-[#0b0b0e] text-lg"
-            >
-              ✕
-            </button>
-            <Eyebrow>New circle</Eyebrow>
-            <h2 className="font-display font-semibold text-2xl mt-2 mb-6">Start a circle</h2>
-            <CreateWizard onSuccess={(addr) => { setShowCreate(false); router.push(`/circle/${addr}`); }} />
+          <div className="bg-[#faf9f6] rounded-[28px] shadow-2xl w-full max-w-2xl relative max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-[#faf9f6] px-8 pt-7 pb-5 flex items-start justify-between gap-4 border-b border-[#e6e2d9]/80 rounded-t-[28px]">
+              <div>
+                <Eyebrow>New circle</Eyebrow>
+                <h2 className="font-display font-semibold text-2xl mt-2">Start a circle</h2>
+              </div>
+              <button
+                onClick={() => setShowCreate(false)}
+                aria-label="Close"
+                className="w-9 h-9 rounded-full bg-white shadow-sm grid place-items-center text-[#6b6470] hover:text-[#0b0b0e] transition-colors shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="px-8 py-7">
+              <CreateWizard onSuccess={(addr) => { setShowCreate(false); router.push(`/circle/${addr}`); }} />
+            </div>
           </div>
         </div>
       )}
