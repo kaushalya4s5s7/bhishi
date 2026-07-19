@@ -16,6 +16,9 @@ export class PushController {
   }
 
   @Delete('subscribe')
+  // Not wallet-scoped by design: the guard just rejects anonymous callers.
+  // `endpoint` is a hard-to-guess push-service URL only the subscribing
+  // browser knows, so deleting by it alone is safe without an ownership check.
   unsubscribe(@Body() dto: SaveSubscriptionDto) {
     return this.push.remove(dto.endpoint);
   }
