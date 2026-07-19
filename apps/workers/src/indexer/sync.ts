@@ -80,7 +80,21 @@ export async function syncFactory(
         createdAt: new Date(Number(block.timestamp) * 1000),
         lastIndexedBlock: log.blockNumber!,
       },
-      update: {},
+      // Reconcile config fields on rows that already exist (e.g. written by
+      // the API's fast-path before the indexer reached this block). These all
+      // come from the same immutable CircleCreated event, so this is the
+      // authoritative correction pass — with update:{} a partial row would
+      // keep stale values forever. lastIndexedBlock is deliberately NOT
+      // touched: it belongs to the per-circle event scan, not discovery.
+      update: {
+        factoryTx: log.transactionHash!,
+        creator: (a.creator ?? '0x').toLowerCase(),
+        seats: Number(a.seats ?? 0n),
+        contribution: (a.contribution ?? 0n).toString(),
+        bond: (a.bond ?? 0n).toString(),
+        mode: MODE_BY_ORDINAL[Number(a.mode ?? 0)] ?? 'LUCKY_DRAW',
+        createdAt: new Date(Number(block.timestamp) * 1000),
+      },
     });
   }
   return logs.length;

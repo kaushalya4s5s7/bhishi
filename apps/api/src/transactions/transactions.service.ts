@@ -85,7 +85,18 @@ export class TransactionsService {
     // emitting address is the trustworthy anchor either way.
     const created = (parseEventLogs({ abi: [circleCreatedEvent], logs: receipt.logs }) as unknown as AnyLog[]).find(
       (l) => l.address.toLowerCase() === factory,
-    ) as (AnyLog & { args: { circle?: `0x${string}`; creator?: `0x${string}` } }) | undefined;
+    ) as
+      | (AnyLog & {
+          args: {
+            circle?: `0x${string}`;
+            creator?: `0x${string}`;
+            contribution?: bigint;
+            seats?: bigint;
+            bond?: bigint;
+            mode?: number;
+          };
+        })
+      | undefined;
     if (!created?.args.circle) {
       throw new BadRequestException('No CircleCreated event from the CircleFactory in this transaction');
     }
@@ -102,11 +113,12 @@ export class TransactionsService {
     const existing = await prisma.circle.findUnique({ where: { address: circleAddress } });
     if (existing) return { applied: false, reason: 'already-indexed', circleAddress };
 
-    // Best-effort only: decode what we can here so the row EXISTS immediately
-    // (the creator's dashboard needs that), but leave lastIndexedBlock at 0 so
-    // the indexer's next pass is guaranteed to reconcile exact contribution/
-    // seats/bond/mode values authoritatively rather than trusting a partial
-    // fast-path guess.
+    // The CircleCreated event carries the full config, decoded from the chain
+    // log itself — write the REAL values, not placeholders. (A seats=0
+    // placeholder poisons everything reading the row: invite validation
+    // computes memberCount >= seats → every invite reports "full".)
+    // lastIndexedBlock stays 0 so the indexer still backfills this circle's
+    // per-event history from its own cursor.
     const block = await this.publicClient.getBlock({ blockNumber: receipt.blockNumber });
     await prisma.circle.upsert({
       where: { address: circleAddress },
@@ -114,16 +126,16 @@ export class TransactionsService {
         address: circleAddress,
         factoryTx: receipt.transactionHash,
         creator,
-        seats: 0,
-        contribution: '0',
-        bond: '0',
-        mode: 'LUCKY_DRAW',
+        seats: Number(created.args.seats ?? 0n),
+        contribution: (created.args.contribution ?? 0n).toString(),
+        bond: (created.args.bond ?? 0n).toString(),
+        mode: Number(created.args.mode ?? 0) === 1 ? 'AUCTION' : 'LUCKY_DRAW',
         createdAt: new Date(Number(block.timestamp) * 1000),
         lastIndexedBlock: 0n,
       },
       update: {},
     });
-    this.logger.log({ circleAddress, creator }, 'fast-path: circle row created, awaiting indexer reconciliation');
+    this.logger.log({ circleAddress, creator }, 'fast-path: circle row created');
     return { applied: true, circleAddress };
   }
 

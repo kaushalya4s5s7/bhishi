@@ -98,8 +98,15 @@ export class InvitesService {
     }
 
     const circle = await this.prisma.circle.findUnique({ where: { address: invite.circleAddress } });
+    // Row missing (indexer still catching up) or seats not yet reconciled:
+    // don't falsely report "full" — memberCount >= 0 is vacuously true against
+    // a seats=0 placeholder, and `!circle` says nothing about capacity. The
+    // real gate is on-chain join() either way; this check is only a courtesy.
+    if (!circle || circle.seats === 0) {
+      return { valid: true, circleAddress: invite.circleAddress, kind: invite.kind, status: invite.status };
+    }
     const memberCount = await this.prisma.member.count({ where: { circleAddress: invite.circleAddress } });
-    const full = !circle || circle.state !== 'FILLING' || memberCount >= circle.seats;
+    const full = circle.state !== 'FILLING' || memberCount >= circle.seats;
     if (full) {
       return { valid: false, reason: 'full', circleAddress: invite.circleAddress, kind: invite.kind };
     }

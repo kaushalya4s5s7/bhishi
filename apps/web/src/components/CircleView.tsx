@@ -150,19 +150,26 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // from loadFromApi(), this only corrects/sharpens it.
   const loadLive = useCallback(async () => {
     try {
-      const [stateVal, memberCountVal, roundVal, roundPoolVal, bondVal] = await Promise.all([
+      const [stateVal, memberCountVal, roundVal, roundPoolVal, bondVal, seatsVal, contributionVal] = await Promise.all([
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'roundPool' }).catch(() => 0n),
-        // bond is immutable on the contract, but the Join button's approval
-        // amount depends on it — if the indexer hasn't caught this circle yet,
-        // loadFromApi() never calls setBond(), and join() would otherwise fire
-        // with bond=0, skip the approve, and revert with InsufficientAllowance.
+        // bond/seats/contribution are immutable circle config, but everything
+        // the user ACTS on depends on them (join approves `bond`; the UI shows
+        // seats and per-round contribution). If the indexer hasn't caught this
+        // circle yet, loadFromApi() 404s (or serves a placeholder row with
+        // zeros), so these must come from the chain — otherwise join() fires
+        // with bond=0, skips the approve, and reverts InsufficientAllowance,
+        // and the page renders "2 / 0 seats" style nonsense.
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'bond' }).catch(() => null),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }).catch(() => null),
+        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }).catch(() => null),
       ]);
       setRoundPool(BigInt(roundPoolVal as any));
       if (bondVal !== null) setBond(BigInt(bondVal as any));
+      if (seatsVal !== null) setSeats(Number(seatsVal as any));
+      if (contributionVal !== null) setContribution(BigInt(contributionVal as any));
 
       const count = Number(memberCountVal);
       const memberList = (
@@ -703,15 +710,26 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             <p className="text-sm text-[#6b6470]">You've joined. Waiting for all seats to fill.</p>
           ) : (
             <Button
-              onClick={() => {
-                // bond is read from both the indexer and live chain (loadLive);
-                // 0 here means neither has resolved it yet — never approve/join
-                // for an unverified amount (see loadLive's bond comment).
-                if (bond === 0n) {
-                  setTxError('Circle details are still loading — try again in a moment.');
-                  return;
+              onClick={async () => {
+                // bond is read from the indexer and live chain (loadLive), but
+                // a fast click can land before either resolves. Never
+                // approve/join for an unverified 0 amount — fetch it from the
+                // contract right here instead of bouncing the user.
+                let joinBond = bond;
+                if (joinBond === 0n) {
+                  try {
+                    joinBond = BigInt(
+                      (await publicClient.readContract({
+                        address: circleAddress, abi: circleAbi as any, functionName: 'bond',
+                      })) as bigint,
+                    );
+                    setBond(joinBond);
+                  } catch {
+                    setTxError('Could not load the circle bond — check your connection and try again.');
+                    return;
+                  }
                 }
-                doWriteWithApproval('join', [], bond);
+                doWriteWithApproval('join', [], joinBond);
               }}
               disabled={txPending}
             >
