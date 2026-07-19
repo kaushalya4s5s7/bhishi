@@ -17,22 +17,27 @@ export function pushSupported(): boolean {
  *  Returns true on success. Safe to call repeatedly. */
 export async function enablePush(token: string | null): Promise<boolean> {
   if (!pushSupported()) return false;
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') return false;
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') return false;
 
-  const reg = await navigator.serviceWorker.ready;
-  const sub =
-    (await reg.pushManager.getSubscription()) ??
-    (await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID) as BufferSource,
-    }));
+    const reg = await navigator.serviceWorker.ready;
+    const sub =
+      (await reg.pushManager.getSubscription()) ??
+      (await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID) as BufferSource,
+      }));
 
-  const json = sub.toJSON();
-  const res = await fetch(apiUrl('/api/push/subscribe'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ endpoint: sub.endpoint, p256dh: json.keys!.p256dh, auth: json.keys!.auth }),
-  });
-  return res.ok;
+    const json = sub.toJSON();
+    const res = await fetch(apiUrl('/api/push/subscribe'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ endpoint: sub.endpoint, p256dh: json.keys!.p256dh, auth: json.keys!.auth }),
+    });
+    return res.ok;
+  } catch {
+    // Subscribe/network failure is non-fatal — the caller just stays un-subscribed.
+    return false;
+  }
 }

@@ -20,9 +20,12 @@ export function EnablePush() {
       disabled={busy}
       onClick={async () => {
         setBusy(true);
-        const ok = await enablePush(await getAccessToken().catch(() => null));
-        setBusy(false);
-        if (ok) setShow(false);
+        try {
+          const ok = await enablePush(await getAccessToken().catch(() => null));
+          if (ok) setShow(false);
+        } finally {
+          setBusy(false);
+        }
       }}
       className="text-xs text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70 disabled:opacity-40"
     >
