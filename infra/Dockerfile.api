@@ -28,4 +28,6 @@ COPY --from=build /repo/apps/api/node_modules ./apps/api/node_modules
 WORKDIR /repo/apps/api
 EXPOSE 4000
 # Compose healthcheck hits /api/health, which probes Postgres for real.
-CMD ["node", "dist/main.js"]
+# Apply any pending Prisma migrations before boot, so a fresh database (a new
+# environment, or a Postgres that was recreated) is never left schema-less.
+CMD ["sh", "-c", "../../packages/db/node_modules/.bin/prisma migrate deploy --schema ../../packages/db/prisma/schema.prisma && node dist/main.js"]

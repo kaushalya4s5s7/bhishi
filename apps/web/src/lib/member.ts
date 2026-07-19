@@ -7,6 +7,21 @@ import { monadTestnetChain } from './privy';
 import { publicClient, getWalletClient } from './wallet';
 
 /**
+ * viem's waitForTransactionReceipt resolves once a receipt exists — it does
+ * NOT throw on `status: 'reverted'`. Without this check, a reverted approve
+ * (or any reverted tx) is silently treated as success, and the caller
+ * proceeds as if the on-chain effect happened — e.g. join() then fails with
+ * a bare, undecoded "execution reverted" because the approve never landed.
+ */
+async function waitForSuccess(hash: `0x${string}`) {
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== 'success') {
+    throw new Error(`Transaction reverted on-chain (${hash})`);
+  }
+  return receipt;
+}
+
+/**
  * THE single source of truth for "who is this member on-chain" and "how do we
  * send their transactions".
  *
@@ -127,7 +142,7 @@ export function useMember(): Member {
         data: encodeFunctionData({ abi, functionName, args }),
         ...(value !== undefined ? { value } : {}),
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccess(hash);
       return hash as `0x${string}`;
     }
 
@@ -143,7 +158,7 @@ export function useMember(): Member {
     });
     const gas = (estimated * GAS_BUFFER_NUM) / GAS_BUFFER_DEN;
     const hash = await wc.writeContract({ address: to, abi, functionName, args, gas, ...(value !== undefined ? { value } : {}) });
-    await publicClient.waitForTransactionReceipt({ hash });
+    await waitForSuccess(hash);
     return hash as `0x${string}`;
   }
 
@@ -170,7 +185,7 @@ export function useMember(): Member {
     });
     const gas = (estimated * GAS_BUFFER_NUM) / GAS_BUFFER_DEN;
     const hash = await wc.writeContract({ address: to, abi, functionName, args, gas, ...(value !== undefined ? { value } : {}) });
-    await publicClient.waitForTransactionReceipt({ hash });
+    await waitForSuccess(hash);
     return hash as `0x${string}`;
   }
 
