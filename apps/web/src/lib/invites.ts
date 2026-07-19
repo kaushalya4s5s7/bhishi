@@ -29,7 +29,11 @@ export async function createInvites(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.message ?? `Invite failed (${res.status})`);
+    // Always include the status so callers can branch on it (e.g. 409 = a
+    // retryable indexing race vs 403 = genuine non-creator) even when the API
+    // also provides a human message.
+    const detail = body?.message ? `${body.message} (${res.status})` : `Invite failed (${res.status})`;
+    throw new Error(detail);
   }
   return res.json();
 }

@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createPublicClient, http, type PublicClient } from 'viem';
+import { circleAbi, circleFactoryAbi, addresses } from '@bhishi/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EmailService } from '../email/email.service.js';
 import { CreateInvitesDto } from './dto/create-invites.dto.js';
@@ -18,12 +20,87 @@ export interface ValidateResult {
 @Injectable()
 export class InvitesService {
   private readonly logger = new Logger(InvitesService.name);
+  private readonly publicClient: PublicClient;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
-  ) {}
+  ) {
+    const rpcUrl = this.config.get<string>('MONAD_RPC_URL') ?? 'https://testnet-rpc.monad.xyz';
+    this.publicClient = createPublicClient({
+      chain: {
+        id: 10143,
+        name: 'Monad Testnet',
+        nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
+        rpcUrls: { default: { http: [rpcUrl] } },
+      },
+      transport: http(rpcUrl),
+    }) as PublicClient;
+  }
+
+  /**
+   * Materialize a circle's row straight from chain when the indexer hasn't
+   * written it yet. The invite link only needs {circleAddress, creator}, and
+   * both are known on chain the instant createCircle mines — so there's no
+   * reason to wait on the indexer. Verifies the address is a real
+   * factory-deployed circle (isCircle) before trusting its getters, so a random
+   * contract can't be passed off as a circle, then reads the FULL config
+   * (creator/seats/bond/contribution/mode/state) and upserts a row so the
+   * Invite FK is satisfied. The indexer later reconciles the same row
+   * idempotently (upsert on the same address). Returns the lowercased creator,
+   * or null if the address isn't a circle this factory made (or a read fails).
+   */
+  private async ensureCircleFromChain(circleAddress: string): Promise<string | null> {
+    try {
+      const isCircle = (await this.publicClient.readContract({
+        address: addresses.monadTestnet.factory,
+        abi: circleFactoryAbi as never,
+        functionName: 'isCircle',
+        args: [circleAddress as `0x${string}`],
+      })) as boolean;
+      if (!isCircle) return null;
+
+      const addr = circleAddress as `0x${string}`;
+      const [creator, seats, bond, contribution, mode, state] = (await Promise.all([
+        this.publicClient.readContract({ address: addr, abi: circleAbi as never, functionName: 'creator' }),
+        this.publicClient.readContract({ address: addr, abi: circleAbi as never, functionName: 'seats' }),
+        this.publicClient.readContract({ address: addr, abi: circleAbi as never, functionName: 'bond' }),
+        this.publicClient.readContract({ address: addr, abi: circleAbi as never, functionName: 'contribution' }),
+        this.publicClient.readContract({ address: addr, abi: circleAbi as never, functionName: 'mode' }),
+        this.publicClient.readContract({ address: addr, abi: circleAbi as never, functionName: 'state' }),
+      ])) as [string, bigint, bigint, bigint, number, number];
+
+      const creatorLc = creator.toLowerCase();
+      // Write the REAL config, not placeholders — a seats=0 row would make every
+      // invite report the circle "full" (validate() computes memberCount >= seats).
+      // lastIndexedBlock stays 0 so the indexer still backfills per-event history.
+      await this.prisma.circle.upsert({
+        where: { address: circleAddress },
+        create: {
+          address: circleAddress,
+          factoryTx: '', // unknown here; the indexer fills the authoritative value
+          creator: creatorLc,
+          seats: Number(seats),
+          contribution: contribution.toString(),
+          bond: bond.toString(),
+          mode: Number(mode) === 1 ? 'AUCTION' : 'LUCKY_DRAW',
+          state: ['FILLING', 'ACTIVE', 'ABORTED_FILLING', 'COMMIT', 'REVEAL', 'DRAW', 'PAYOUT', 'COMPLETED', 'STALLED'][Number(state)] as never,
+          createdAt: new Date(),
+          lastIndexedBlock: 0n,
+        },
+        update: {},
+      });
+      this.logger.log({ circleAddress, creator: creatorLc }, 'createInvites: materialized circle row from chain');
+      return creatorLc;
+    } catch (err) {
+      this.logger.warn(
+        { circleAddress, err: (err as Error).message },
+        'ensureCircleFromChain: on-chain read failed',
+      );
+      return null;
+    }
+  }
 
   private webUrl(): string {
     return (this.config.get<string>('PUBLIC_WEB_URL') ?? 'http://localhost:3000').replace(/\/$/, '');
@@ -48,7 +125,30 @@ export class InvitesService {
     const callerAddr = caller.toLowerCase();
 
     const circle = await this.prisma.circle.findUnique({ where: { address: circleAddress } });
-    if (!circle || circle.creator.toLowerCase() !== callerAddr) {
+    // The invite link only needs {circleAddress, creator}, and both are known on
+    // chain the instant createCircle mines. So DON'T block on the indexer: if the
+    // row isn't there yet, read the creator straight from the contract. This lets
+    // the creator get their link INSTANTLY after creating, no polling/retry.
+    const creator = circle
+      ? circle.creator.toLowerCase()
+      : await this.ensureCircleFromChain(circleAddress);
+
+    if (!creator) {
+      // Not indexed AND not a factory-deployed circle on chain (or the RPC read
+      // failed). 409, not 403: a genuinely-just-created circle resolves via the
+      // chain read above, so reaching here is either a bad address or a transient
+      // RPC hiccup — retryable, not an authorization failure.
+      this.logger.warn(
+        { circleAddress, callerAddr },
+        'createInvites: circle not indexed and not resolvable on-chain (retryable)',
+      );
+      throw new ConflictException('Circle not found yet — try again in a moment');
+    }
+    if (creator !== callerAddr) {
+      this.logger.warn(
+        { circleAddress, creator, callerAddr, source: circle ? 'indexed' : 'chain' },
+        'createInvites: caller is not the creator',
+      );
       throw new ForbiddenException('Only the circle creator can send invites');
     }
 

@@ -30,7 +30,24 @@ export function InvitePanel({ circleAddress }: InvitePanelProps) {
     setMsg(null);
     try {
       const token = await getAccessToken();
-      const res = await createInvites(token, circleAddress, parseEmails(emails));
+      // The API resolves the creator straight from chain, so the link is
+      // available the instant createCircle mines — no indexer wait. A 409 only
+      // happens if the circle isn't visible on chain yet (RPC lag) or the read
+      // failed; retry briefly on that before surfacing anything. A 403 (genuine
+      // non-creator) is never retried.
+      let res: Awaited<ReturnType<typeof createInvites>> | undefined;
+      for (let i = 0; i < 4; i++) {
+        try {
+          res = await createInvites(token, circleAddress, parseEmails(emails));
+          break;
+        } catch (err: unknown) {
+          const m = err instanceof Error ? err.message : '';
+          const retryable = /not found yet|not indexed/i.test(m) || m.includes('409');
+          if (!retryable || i === 3) throw err;
+          await new Promise(r => setTimeout(r, 1200));
+        }
+      }
+      if (!res) throw new Error('Could not create invites.');
       const tok = new URL(res.linkUrl).searchParams.get('invite') ?? '';
       setLinkUrl(shareUrl(tok));
       const sent = res.invited.length;
@@ -41,9 +58,16 @@ export function InvitePanel({ circleAddress }: InvitePanelProps) {
       if (parts.length > 0) setMsg(parts.join(' '));
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : undefined;
-      setMsg(message?.includes('403') || /creator/i.test(message ?? '')
-        ? 'Only the circle creator can send invites.'
-        : (message ?? 'Could not create invites.'));
+      // Only the genuine creator-mismatch (403) shows the creator message. A
+      // 409 ("not found yet" — chain not caught up / RPC hiccup) gets its own
+      // copy so it's never mislabeled as an authorization problem.
+      if (/not found yet|not indexed/i.test(message ?? '') || message?.includes('409')) {
+        setMsg('Circle not visible on-chain yet — wait a moment and try again.');
+      } else if (message?.includes('403') || /creator/i.test(message ?? '')) {
+        setMsg('Only the circle creator can send invites.');
+      } else {
+        setMsg(message ?? 'Could not create invites.');
+      }
     } finally {
       setBusy(false);
     }
