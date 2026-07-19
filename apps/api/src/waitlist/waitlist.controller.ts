@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, OptionalPrivyAuthGuard } from '../auth/privy-auth.guard.js';
 import { CreateWaitlistEntryDto } from './dto/create-waitlist-entry.dto.js';
@@ -21,5 +21,12 @@ export class WaitlistController {
     // Privy DID) so the notify worker can match on-chain members to their contact.
     const entry = await this.waitlist.create(dto, req.user?.walletAddress);
     return { ok: true, id: entry.id };
+  }
+
+  /** Public feed for the landing page's community carousel — see
+   *  WaitlistService.listForCarousel for exactly which fields are exposed. */
+  @Get('carousel')
+  list(@Query('take') take?: string) {
+    return this.waitlist.listForCarousel(take ? Number(take) : undefined);
   }
 }

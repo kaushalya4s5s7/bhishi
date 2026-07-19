@@ -5,6 +5,7 @@ import { Marquee } from '@/components/Marquee';
 import { Reveal } from '@/components/Reveal';
 import { HeroCTAs } from '@/components/HeroCTAs';
 import { SmoothScroll } from '@/components/SmoothScroll';
+import { CommunityCarousel } from '@/components/CommunityCarousel';
 
 const TRUST_ITEMS = [
   { label: 'No one holds your money' },
@@ -240,6 +241,8 @@ export default function LandingPage() {
           </Reveal>
         </div>
       </section>
+
+      <CommunityCarousel />
 
       {/* CTA */}
       <section className="py-20 sm:py-24">

@@ -47,4 +47,16 @@ export class CreateWaitlistEntryDto {
   @IsOptional()
   @IsBoolean()
   wantsTryNow?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  location?: string;
+
+  /** "What do you feel about our platform?" — shown on the landing page's
+   *  community carousel alongside name/tradition/location when present. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  message?: string;
 }

@@ -23,6 +23,8 @@ export class WaitlistService {
       trackingMethod: dto.trackingMethod ?? null,
       role: dto.role ?? null,
       wantsTryNow: dto.wantsTryNow ?? false,
+      location: dto.location ?? null,
+      message: dto.message ?? null,
       walletAddress: walletAddress ?? null,
     };
 
@@ -38,5 +40,27 @@ export class WaitlistService {
 
   count() {
     return this.prisma.waitlistEntry.count();
+  }
+
+  /**
+   * Public-safe feed for the landing page's community carousel: only entries
+   * that actually shared a message, and only the fields safe to show a
+   * stranger (no email/whatsapp/walletAddress — this is an unauthenticated
+   * GET). Newest first, capped.
+   */
+  async listForCarousel(take = 60) {
+    const rows = await this.prisma.waitlistEntry.findMany({
+      where: { message: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(take, 100),
+      select: { id: true, name: true, tradition: true, location: true, message: true },
+    });
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      community: r.tradition ?? 'Bhishi',
+      location: r.location ?? '',
+      message: r.message as string,
+    }));
   }
 }

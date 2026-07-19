@@ -126,6 +126,12 @@ model WaitlistEntry {
   trackingMethod String?
   role           String?
   wantsTryNow    Boolean  @default(false)
+  /// City/region the submitter gave, shown on their landing-page community
+  /// carousel card alongside `tradition`.
+  location       String?
+  /// Free-text "what do you feel about our platform" reply. Optional — an
+  /// entry without one just doesn't get a carousel card (see waitlist.service).
+  message        String?
   /// Wallet address if the submitter was authenticated (Privy).
   walletAddress  String?
   createdAt      DateTime @default(now())

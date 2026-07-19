@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import { apiUrl } from '@/lib/api';
 
 const TRADITIONS = [
-  'Paluwagan (Filipino)',
-  'Ajo (Nigerian)',
-  'Esusu (West African)',
-  'Pardna (Caribbean)',
-  'Chama (Kenyan)',
-  'Dhukuti (Nepali)',
+  'Bhishi',
+  'Chit Fund',
+  'Kitty Party',
+  'Committee (BC)',
+  'ROSCA',
+  'Susu',
+  'Tanda',
   'Other / our own tradition',
 ];
 
@@ -27,6 +28,8 @@ export default function EarlyAccessPage() {
   const [circleSize, setCircleSize] = useState('');
   const [trackingMethod, setTrackingMethod] = useState('');
   const [role, setRole] = useState<'member' | 'organiser' | ''>('');
+  const [location, setLocation] = useState('');
+  const [message, setMessage] = useState('');
   const [status, setStatus] = useState<Status>('idle');
 
   const submit = async (e: React.FormEvent) => {
@@ -45,6 +48,8 @@ export default function EarlyAccessPage() {
       if (circleSize) body.circleSize = circleSize;
       if (trackingMethod) body.trackingMethod = trackingMethod;
       if (role) body.role = role;
+      if (location) body.location = location;
+      if (message) body.message = message;
 
       const res = await fetch(apiUrl('/api/waitlist'), {
         method: 'POST',
@@ -253,6 +258,41 @@ export default function EarlyAccessPage() {
                     </label>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-black/10">
+            <p className="text-sm font-semibold text-[#0b0b0e] mb-4">Join the community wall</p>
+            <p className="text-xs text-[#6b6470] -mt-3 mb-4">
+              Optional — share where you&apos;re from and what you think of Bhishi, and your card
+              joins the wall on our landing page.
+            </p>
+
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-[#0b0b0e] mb-1.5">City</label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={e => setLocation(e.target.value)}
+                  placeholder="e.g. Chennai, Mumbai, Bengaluru"
+                  className="w-full px-4 py-2.5 border border-black/15 focus:outline-none focus:ring-2 focus:ring-[#c9a15c]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[#0b0b0e] mb-1.5">
+                  What do you feel about our platform?
+                </label>
+                <textarea
+                  value={message}
+                  onChange={e => setMessage(e.target.value)}
+                  maxLength={400}
+                  rows={3}
+                  placeholder="Tell us what stands out, or what you're hoping to use it for"
+                  className="w-full px-4 py-2.5 border border-black/15 focus:outline-none focus:ring-2 focus:ring-[#c9a15c] resize-none"
+                />
               </div>
             </div>
           </div>
