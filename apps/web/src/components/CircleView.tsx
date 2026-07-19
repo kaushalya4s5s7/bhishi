@@ -186,8 +186,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       // helper's doc comment.
       const advanceCheckKey = `${Number(roundVal)}:${count}`;
       if (userAddress && Number(stateVal) === STATE_NAMES.indexOf('COMMIT') && advanceCheckedRef.current !== advanceCheckKey) {
-        advanceCheckedRef.current = advanceCheckKey;
-        void tryAdvanceToReveal(memberList);
+        // Only burn the "already checked" key when the check is CONCLUSIVE
+        // (everyone committed). If not everyone has committed yet — or a read
+        // failed — leave the key unset so a LATER poll (after the final commit
+        // lands) still fires advanceToReveal(). The previous unconditional set
+        // stranded the circle in COMMIT whenever the first poll ran before the
+        // last member had committed.
+        void tryAdvanceToReveal(memberList).then(conclusive => {
+          if (conclusive) advanceCheckedRef.current = advanceCheckKey;
+        });
       }
       if (userAddress && Number(stateVal) === STATE_NAMES.indexOf('DRAW') && drawRequestedCheckedRef.current !== Number(roundVal)) {
         drawRequestedCheckedRef.current = Number(roundVal);
@@ -326,7 +333,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
    * silently no-ops — the circle will simply wait for the next committer (or
    * a future poll) to try again rather than surface an error to this user.
    */
-  async function tryAdvanceToReveal(memberList: string[] = members) {
+  /**
+   * @returns `true` when the outcome for this round is CONCLUSIVE — either we
+   *   advanced it, or everyone had committed (someone else may have advanced).
+   *   `false` means "not everyone has committed yet", so the caller MUST keep
+   *   re-checking on future polls rather than marking this round done. A thrown
+   *   read/write is treated as inconclusive (`false`) too, so a transient RPC
+   *   failure never permanently disables the advance for this round.
+   */
+  async function tryAdvanceToReveal(memberList: string[] = members): Promise<boolean> {
     try {
       const committedFlags = await Promise.all(
         memberList.map(m =>
@@ -334,11 +349,15 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         ),
       );
       const allCommitted = committedFlags.every(Boolean);
-      if (!allCommitted) return;
+      if (!allCommitted) return false;
       await write({ address: circleAddress, abi: circleAbi as any, functionName: 'advanceToReveal', args: [] });
+      return true;
     } catch {
       // Someone else likely already advanced it, or the circle isn't ready —
-      // either way, not an error worth surfacing to this user.
+      // either way, not an error worth surfacing to this user. Treated as
+      // inconclusive so a NotCommitPhase revert (already advanced) is fine, but
+      // a transient RPC error still leaves the round eligible for a retry.
+      return false;
     }
   }
 
