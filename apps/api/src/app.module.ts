@@ -12,6 +12,7 @@ import { ProfilesModule } from './profiles/profiles.module.js';
 import { SponsorModule } from './sponsor/sponsor.module.js';
 import { InvitesModule } from './invites/invites.module.js';
 import { TransactionsModule } from './transactions/transactions.module.js';
+import { PushModule } from './push/push.module.js';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { TransactionsModule } from './transactions/transactions.module.js';
     SponsorModule,
     InvitesModule,
     TransactionsModule,
+    PushModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
