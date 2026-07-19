@@ -47,17 +47,36 @@ jobs:
 
       # Migrations run BEFORE the new containers start, so a rolled-out image
       # never hits a schema it doesn't know about.
+      #
+      # `secrets` can't be read in an `if:` condition (GitHub rejects it as an
+      # "unrecognized named-value" — only `env`/`run` contexts can see
+      # secrets), so the presence check happens inside the shell instead.
       - name: Run database migrations
-        if: ${{ secrets.DATABASE_URL != '' }}
         run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret not set — skipping migration."
+            exit 0
+          fi
           corepack enable
           pnpm install --frozen-lockfile
           pnpm --filter @bhishi/db exec prisma migrate deploy
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
+      - name: Check deploy target
+        id: deploy_target
+        run: |
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "DEPLOY_HOST secret not set — skipping SSH deploy."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+
       - name: Deploy to host
-        if: ${{ secrets.DEPLOY_HOST != '' }}
+        if: steps.deploy_target.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.DEPLOY_HOST }}
