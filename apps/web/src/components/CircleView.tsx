@@ -544,7 +544,7 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         </div>
       )}
       {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-4 mt-6">
+      <div className="flex items-start justify-between flex-wrap gap-4 mt-10">
         <div>
           <div className="flex items-center gap-3">
             <Eyebrow>Circle</Eyebrow>

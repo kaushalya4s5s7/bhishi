@@ -54,6 +54,41 @@ class ResendProvider implements NotifyProvider {
   }
 }
 
+/**
+ * Email via SendGrid. Uses fetch directly for the same reason as Resend.
+ *
+ * SendGrid's Single Sender Verification (verify one address via email link)
+ * needs no DNS records, unlike full domain auth — the option that actually
+ * works when the app only has a *.up.railway.app subdomain, which nobody
+ * controls DNS for.
+ */
+class SendGridProvider implements NotifyProvider {
+  readonly name = 'sendgrid';
+  constructor(private readonly apiKey: string, private readonly from: string) {}
+
+  async send(to: string, subject: string, body: string): Promise<SendResult> {
+    try {
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: { email: this.from },
+          subject,
+          content: [{ type: 'text/plain', value: body }],
+        }),
+      });
+      if (!res.ok) return { ok: false, error: `sendgrid ${res.status}: ${await res.text()}` };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+}
+
 /** WhatsApp via Twilio's messaging API. */
 class TwilioWhatsAppProvider implements NotifyProvider {
   readonly name = 'twilio-whatsapp';
@@ -87,9 +122,15 @@ class TwilioWhatsAppProvider implements NotifyProvider {
   }
 }
 
-/** Selected once at import from env; falls back to the log driver. */
-export const emailProvider: NotifyProvider =
-  process.env.RESEND_API_KEY
+/**
+ * Selected once at import from env; falls back to the log driver.
+ * SendGrid takes priority when configured — Resend requires DNS-based domain
+ * verification, which is unreachable while the app lives on a
+ * *.up.railway.app subdomain we don't control DNS for.
+ */
+export const emailProvider: NotifyProvider = process.env.SENDGRID_API_KEY
+  ? new SendGridProvider(process.env.SENDGRID_API_KEY, process.env.SENDGRID_FROM ?? 'noreply@bhishi.app')
+  : process.env.RESEND_API_KEY
     ? new ResendProvider(process.env.RESEND_API_KEY, process.env.RESEND_FROM ?? 'noreply@bhishi.app')
     : new LogProvider('email(log)');
 

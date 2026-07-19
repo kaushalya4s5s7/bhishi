@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { circleAbi } from '@/lib/contracts';
 import { publicClient } from '@/lib/wallet';
-import { Card, PhaseBadge, SeatRing, truncate } from '@/components/ui';
+import { PhaseBadge, SeatRing, truncate } from '@/components/ui';
 
 const STATE_NAMES = ['FILLING','ACTIVE','ABORTED_FILLING','COMMIT','REVEAL','DRAW','PAYOUT','COMPLETED','STALLED'] as const;
 type StateName = typeof STATE_NAMES[number];
@@ -88,7 +88,7 @@ export function CircleCard({ circle, userAddress }: CircleCardProps) {
 
   return (
     <Link href={actionHref} className="group block">
-      <Card className="p-5 h-full transition-transform group-hover:-translate-y-0.5 group-hover:border-[#0b0b0e]">
+      <div className="rounded-2xl bg-white shadow-sm p-5 h-full transition-transform group-hover:-translate-y-0.5 hover:shadow-md">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="font-mono text-xs text-[#6b6470]">{truncate(circleAddress)}</div>
@@ -103,7 +103,7 @@ export function CircleCard({ circle, userAddress }: CircleCardProps) {
           <SeatRing filled={memberCount} total={seats} />
         </div>
 
-        <div className="flex items-center justify-between pt-4 border-t border-[#e6e2d9]">
+        <div className="flex items-center justify-between pt-4 border-t border-[#f0ede4]">
           <span className="font-mono text-xs text-[#6b6470]">
             {MODE_LABEL[mode] ?? 'Circle'}
           </span>
@@ -111,7 +111,7 @@ export function CircleCard({ circle, userAddress }: CircleCardProps) {
             {actionLabel} <span aria-hidden>→</span>
           </span>
         </div>
-      </Card>
+      </div>
     </Link>
   );
 }

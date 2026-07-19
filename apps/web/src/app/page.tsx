@@ -26,7 +26,7 @@ export default function LandingPage() {
       <div className="pointer-events-none absolute inset-y-0 right-4 sm:right-6 z-40 w-px bg-black/20" />
       {/* Hero */}
       <section className="relative bg-[#faf9f6]">
-        <div className="relative h-[60vh] min-h-[400px] sm:h-[63vh] sm:min-h-[400px] mx-4 sm:mx-6 overflow-hidden">
+        <div className="relative h-[60vh] min-h-[400px] sm:h-[63vh] sm:min-h-[400px] mx-4 sm:mx-6 overflow-hidden rounded-xl">
           <Image
             src="/image1.png"
             alt="A family gathers around a table, contributing coins to a shared savings pot."
@@ -35,7 +35,7 @@ export default function LandingPage() {
             className="object-cover object-[50%_38%]"
           />
           <div
-            className="absolute inset-0 opacity-15 mix-blend-overlay"
+            className="absolute inset-0 opacity-15 mix-blend-overlay "
             style={{
               backgroundImage:
                 'linear-gradient(to right, #fdf9f9 1px, transparent 1px), linear-gradient(to bottom, #000 1px, transparent 1px)',
