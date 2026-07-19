@@ -25,8 +25,18 @@ export default function ProfilePage() {
   const onSave = async () => {
     setSaved(false);
     setSaveErr('');
+    const avatar = avatarUrl.trim();
+    // A blank avatar is a valid choice (we fall back to a generated one), but an
+    // invalid non-URL is not — nudge them to Randomize instead of firing off a
+    // request the API rejects with a 400.
+    if (avatar && !/^https?:\/\//i.test(avatar)) {
+      setSaveErr('That avatar isn’t a valid URL. Paste an image link, or click Randomize to generate one.');
+      return;
+    }
     try {
-      await save({ displayName: displayName.trim(), avatarUrl: avatarUrl.trim() });
+      // Send avatarUrl only when set — omitting it (undefined) lets the API skip
+      // URL validation for a deliberately blank avatar.
+      await save({ displayName: displayName.trim(), avatarUrl: avatar || undefined });
       setSaved(true);
     } catch (e) {
       setSaveErr((e as Error).message);

@@ -525,12 +525,18 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   const pot = (Number(contribution) / 1e6) * seats;
   const isAuction = mode === 'AUCTION';
 
-  // AUCTION bid derivations. The bid (discount) is capped at 40% of THIS
-  // round's live pool (Circle.sol MAX_BID_DISCOUNT_BPS). We validate the typed
-  // bid against that cap so we never send a reveal the contract will reject
-  // with BidExceedsCap. `bidUnits` is the on-chain 6-decimal value; the
-  // `amount` committed/revealed must be identical at commit and reveal.
-  const maxBidUnits = (roundPool * 4000n) / 10000n; // 40% of the pool, in base units
+  // AUCTION bid derivations. The bid (discount) is capped at 40% of this
+  // round's pool (Circle.sol MAX_BID_DISCOUNT_BPS). The on-chain `roundPool`
+  // is built up incrementally as members commit — during the COMMIT phase (when
+  // the bid is typed) it can still be 0, which would make the cap 0 and reject
+  // every bid. So we cap against the FULL pool the round converges to:
+  // contribution × seats. We take the larger of the live pool and the full-pool
+  // estimate so the cap is never below what the contract will ultimately enforce
+  // at reveal. `bidUnits` is the on-chain 6-decimal value; the `amount`
+  // committed/revealed must be identical at commit and reveal.
+  const fullPoolUnits = contribution * BigInt(seats);
+  const capBaseUnits = roundPool > fullPoolUnits ? roundPool : fullPoolUnits;
+  const maxBidUnits = (capBaseUnits * 4000n) / 10000n; // 40% of the pool, in base units
   const maxBidMusdc = Number(maxBidUnits) / 1e6;
   const bidNum = bid.trim() === '' ? NaN : Number(bid);
   const bidUnits = Number.isFinite(bidNum) ? BigInt(Math.round(bidNum * 1e6)) : 0n;
