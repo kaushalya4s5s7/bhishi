@@ -132,6 +132,10 @@ class TwilioWhatsAppProvider implements NotifyProvider {
  * for retries against it; that's not treated as an overall send failure as
  * long as at least one other subscription for the wallet succeeded.
  */
+/** Exported so callers (e.g. the notify dispatch loop) can detect this
+ *  specific, permanent failure mode without string-matching independently. */
+export const NO_PUSH_SUBSCRIPTION_ERROR = 'no push subscription for wallet';
+
 class WebPushProvider implements NotifyProvider {
   readonly name = 'webpush';
   constructor() {
@@ -140,7 +144,7 @@ class WebPushProvider implements NotifyProvider {
 
   async send(to: string, subject: string, body: string): Promise<SendResult> {
     const subs = await prisma.pushSubscription.findMany({ where: { walletAddress: to.toLowerCase() } });
-    if (subs.length === 0) return { ok: false, error: 'no push subscription for wallet' };
+    if (subs.length === 0) return { ok: false, error: NO_PUSH_SUBSCRIPTION_ERROR };
 
     const payload = JSON.stringify({ title: subject, body, url: '/dashboard' });
     let anyOk = false;

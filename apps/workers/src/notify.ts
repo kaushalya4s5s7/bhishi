@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 import { prisma } from '@bhishi/db';
 import { logger } from './config.js';
 import { NOTIFY_QUEUE, redisConnection, type NotifyJob } from './queues.js';
-import { emailProvider, notifyReady, pushProvider, whatsappProvider } from './notify/providers.js';
+import { emailProvider, notifyReady, NO_PUSH_SUBSCRIPTION_ERROR, pushProvider, whatsappProvider } from './notify/providers.js';
 import { render } from './notify/templates.js';
 
 /**
@@ -64,7 +64,7 @@ const worker = new Worker<NotifyJob>(
       // exponential backoff (5 attempts) can't fix that, so it's excluded from
       // `failures`/the throw below to avoid a pointless retry storm. It's
       // still recorded as 'failed' in NotificationLog above for visibility.
-      const isMissingPushSubscription = channel === 'webpush' && res.error === 'no push subscription for wallet';
+      const isMissingPushSubscription = channel === 'webpush' && res.error === NO_PUSH_SUBSCRIPTION_ERROR;
       if (!res.ok && !isMissingPushSubscription) failures.push(`${channel}: ${res.error}`);
     }
 
