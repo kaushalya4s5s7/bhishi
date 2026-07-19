@@ -747,30 +747,67 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           ? 'You'
           : memberLabel(profiles[actorAddr.toLowerCase()], actorAddr))
       : null;
-    const roundNo = args.round !== undefined && args.round !== null ? Number(args.round) : undefined;
-    const roundSuffix = roundNo !== undefined ? ` round ${roundNo}` : '';
+    // Rounds are 0-indexed on-chain but shown 1-indexed everywhere in the UI
+    // ("Round 1 of 3"), so translate here — a feed saying "round 0" next to a
+    // header saying "Round 1" reads like a bug.
+    const roundNo = args.round !== undefined && args.round !== null ? Number(args.round) + 1 : undefined;
+    const roundSuffix = roundNo !== undefined ? ` in round ${roundNo}` : '';
+    // mUSDC has 6 decimals; amounts arrive as base-unit strings/bigints.
+    const musdc = (v: unknown) =>
+      v === undefined || v === null ? null : `${(Number(v) / 1e6).toFixed(2)} mUSDC`;
+    const amount = musdc(args.amount);
+    const bid = musdc(args.bid);
 
     switch (name) {
       case 'Joined':
         return who ? { actor: who, text: `${who} joined the circle` } : null;
-      case 'Committed':
-        return who ? { actor: who, text: `${who} committed${roundSuffix}` } : null;
-      case 'Revealed':
-        return who ? { actor: who, text: `${who} revealed their bid${roundSuffix}` } : null;
-      case 'WinnerDrawn':
-        return who ? { actor: who, text: `${who} won${roundSuffix} 🎉` } : null;
-      case 'Claimed':
-        return who ? { actor: who, text: `${who} claimed their balance` } : null;
-      case 'Slashed':
-        return who ? { actor: who, text: `${who} was slashed for missing the reveal` } : null;
+      case 'Activated':
+        return { actor: '', text: 'All seats filled — the circle started' };
       case 'RoundStarted':
-        return { actor: '', text: `Round ${roundNo ?? ''} started`.trim() };
+        return { actor: '', text: `Round ${roundNo ?? ''} started — everyone pays in`.trim() };
+      case 'Committed':
+        return who
+          ? { actor: who, text: `${who} paid the contribution${roundSuffix}` }
+          : null;
+      case 'Revealed':
+        // bid === 0 in LUCKY_DRAW, and for AUCTION past winners (auto-revealed
+        // at commit with a forced zero bid) — don't call that "a bid of 0.00".
+        return who
+          ? {
+              actor: who,
+              text:
+                bid && bid !== '0.00 mUSDC'
+                  ? `${who} revealed a bid of ${bid}${roundSuffix}`
+                  : `${who} confirmed their entry${roundSuffix}`,
+            }
+          : null;
+      case 'DrawReady':
+        return { actor: '', text: `Everyone is in — round ${roundNo ?? ''} is ready to draw`.trim() };
       case 'DrawRequested':
-        return { actor: '', text: `Draw requested${roundSuffix}` };
+        return { actor: '', text: `Randomness requested from Pyth${roundSuffix}` };
+      case 'WinnerDrawn':
+        return who ? { actor: who, text: `${who} won the pot${roundSuffix} 🎉` } : null;
+      case 'Claimed':
+        return who
+          ? { actor: who, text: `${who} withdrew ${amount ?? 'their balance'}` }
+          : null;
+      case 'Slashed':
+        return who
+          ? {
+              actor: who,
+              text: `${who} missed the deadline and was slashed${
+                musdc(args.bondSlashed) ? ` (${musdc(args.bondSlashed)} bond)` : ''
+              }`,
+            }
+          : null;
       case 'Stalled':
-        return { actor: '', text: `Circle stalled${roundSuffix}` };
+        return { actor: '', text: `Circle stalled${roundSuffix} — funds are reclaimable` };
       case 'FillingRefunded':
-        return { actor: '', text: `Circle refunded during filling` };
+        return { actor: '', text: 'Circle never filled — everyone was refunded' };
+      case 'VrfFunded':
+        return { actor: '', text: 'Circle funded to sponsor its own draws' };
+      case 'VrfRefunded':
+        return { actor: '', text: 'Leftover draw funding returned to the creator' };
       default:
         return { actor: '', text: name };
     }
@@ -1316,10 +1353,16 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             </div>
           )}
 
-          {/* Event feed */}
-          {(events.length > 0 || pendingEvents.length > 0) && (
-            <div className="rounded-2xl bg-white shadow-sm p-6">
-              <Eyebrow muted>Recent activity</Eyebrow>
+          {/* Event feed — always rendered, so an empty circle explains itself
+              instead of the card silently disappearing. */}
+          <div className="rounded-2xl bg-white shadow-sm p-6">
+            <Eyebrow muted>Recent activity</Eyebrow>
+            {events.length === 0 && pendingEvents.length === 0 ? (
+              <p className="text-sm text-[#6b6470] mt-4">
+                No activity indexed yet. Every join, payment, reveal, draw and withdrawal
+                shows up here with a link to the transaction on the explorer.
+              </p>
+            ) : (
               <ul className="space-y-2.5 mt-4">
                 {/* The user's OWN just-confirmed actions render INSTANTLY as
                     finished rows — no "syncing" spinner. We already hold the tx
@@ -1329,8 +1372,8 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                 {pendingEvents.map(ev => {
                   const d = describeActivity(ev.name, { member: ev.member });
                   return (
-                    <li key={ev.txHash} className="text-sm text-[#3f3a46] flex gap-2 items-center justify-between">
-                      <span className="min-w-0 truncate">{d?.text ?? ev.name}</span>
+                    <li key={ev.txHash} className="text-sm text-[#3f3a46] flex gap-2 items-start justify-between">
+                      <span className="min-w-0">{d?.text ?? ev.name}</span>
                       {ev.txHash && (
                         <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0" title="View transaction on explorer">↗</a>
                       )}
@@ -1341,8 +1384,8 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                   const d = describeActivity(ev.name, ev.args);
                   if (!d) return null;
                   return (
-                    <li key={ev.txHash || i} className="text-sm text-[#3f3a46] flex gap-2 items-center justify-between">
-                      <span className="min-w-0 truncate">{d.text}</span>
+                    <li key={ev.txHash || i} className="text-sm text-[#3f3a46] flex gap-2 items-start justify-between">
+                      <span className="min-w-0">{d.text}</span>
                       {ev.txHash && (
                         <a
                           href={txUrl(ev.txHash)}
@@ -1358,8 +1401,8 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                   );
                 })}
               </ul>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>
