@@ -135,6 +135,9 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   const [pendingEvents, setPendingEvents] = useState<{ name: string; txHash: string; member?: string }[]>([]);
   const [roundBids, setRoundBids] = useState<RoundBidRow[]>([]);
   const [rounds, setRounds] = useState<CircleRoundRow[]>([]);
+  // Full-activity modal. The card itself stays compact (first few rows); the
+  // whole history lives behind the expand control so the rail never elongates.
+  const [showAllActivity, setShowAllActivity] = useState(false);
 
   // A pending entry is one of the USER'S OWN just-confirmed actions, so its
   // actor is always this wallet. We record it (as `member`) alongside the name
@@ -794,11 +797,14 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       (typeof args.winner === 'string' && args.winner) ||
       (typeof args.defaulter === 'string' && args.defaulter) ||
       undefined;
-    const who = actorAddr
+    const rawWho = actorAddr
       ? (userAddress && actorAddr.toLowerCase() === userAddress.toLowerCase()
           ? 'You'
           : memberLabel(profiles[actorAddr.toLowerCase()], actorAddr))
       : null;
+    // Labels are often full emails (kamalakarchaudhari1589@gmail.com) — at feed
+    // width that swallows the whole line. Keep enough to recognize the person.
+    const who = rawWho && rawWho.length > 18 ? `${rawWho.slice(0, 16)}…` : rawWho;
     // Rounds are 0-indexed on-chain but shown 1-indexed everywhere in the UI
     // ("Round 1 of 3"), so translate here — a feed saying "round 0" next to a
     // header saying "Round 1" reads like a bug.
@@ -864,6 +870,24 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         return { actor: '', text: name };
     }
   }
+
+  // One flat, described list for the activity card AND its expand modal:
+  // the user's own optimistic rows first (newest experience), then the indexed
+  // feed. Rows with no meaningful description are dropped here, once.
+  const activityRows = [
+    ...pendingEvents.map(ev => ({
+      key: `p-${ev.txHash}`,
+      text: describeActivity(ev.name, { member: ev.member })?.text ?? ev.name,
+      txHash: ev.txHash,
+    })),
+    ...events
+      .map((ev, i) => {
+        const d = describeActivity(ev.name, ev.args);
+        return d ? { key: ev.txHash ? `e-${ev.txHash}-${i}` : `e-${i}`, text: d.text, txHash: ev.txHash } : null;
+      })
+      .filter((r): r is { key: string; text: string; txHash: string } => r !== null),
+  ];
+  const ACTIVITY_PREVIEW = 6;
 
   // Group revealed bids by round for the persistent history table. Only rounds
   // that have a winner (ended) are shown — never live/sealed bids. Ascending.
@@ -1406,57 +1430,85 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           )}
 
           {/* Event feed — always rendered, so an empty circle explains itself
-              instead of the card silently disappearing. */}
+              instead of the card silently disappearing. Compact by design: the
+              first few rows, single-line; the full history opens in a modal via
+              the expand control so the rail never elongates. */}
           <div className="rounded-2xl bg-white shadow-sm p-6">
-            <Eyebrow muted>Recent activity</Eyebrow>
-            {events.length === 0 && pendingEvents.length === 0 ? (
+            <div className="flex items-center justify-between">
+              <Eyebrow muted>Recent activity</Eyebrow>
+              {activityRows.length > 0 && (
+                <button
+                  onClick={() => setShowAllActivity(true)}
+                  className="text-[#6b6470] hover:text-[#c9a15c] transition-colors text-base leading-none"
+                  title="View all activity"
+                  aria-label="View all activity"
+                >
+                  ⤢
+                </button>
+              )}
+            </div>
+            {activityRows.length === 0 ? (
               <p className="text-sm text-[#6b6470] mt-4">
                 No activity indexed yet. Every join, payment, reveal, draw and withdrawal
                 shows up here with a link to the transaction on the explorer.
               </p>
             ) : (
-              <ul className="space-y-2.5 mt-4">
-                {/* The user's OWN just-confirmed actions render INSTANTLY as
-                    finished rows — no "syncing" spinner. We already hold the tx
-                    hash (the only thing the indexer would add), so there is
-                    nothing to wait for. Each de-dupes itself once the indexed
-                    copy arrives (loadFromApi drops it by txHash). */}
-                {pendingEvents.map(ev => {
-                  const d = describeActivity(ev.name, { member: ev.member });
-                  return (
-                    <li key={ev.txHash} className="text-sm text-[#3f3a46] flex gap-2 items-start justify-between">
-                      <span className="min-w-0">{d?.text ?? ev.name}</span>
-                      {ev.txHash && (
-                        <a href={txUrl(ev.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0" title="View transaction on explorer">↗</a>
+              <>
+                <ul className="space-y-2.5 mt-4">
+                  {activityRows.slice(0, ACTIVITY_PREVIEW).map(row => (
+                    <li key={row.key} className="text-sm text-[#3f3a46] flex gap-2 items-center justify-between">
+                      <span className="min-w-0 truncate">{row.text}</span>
+                      {row.txHash && (
+                        <a href={txUrl(row.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0" title="View transaction on explorer">↗</a>
                       )}
                     </li>
-                  );
-                })}
-                {events.map((ev, i) => {
-                  const d = describeActivity(ev.name, ev.args);
-                  if (!d) return null;
-                  return (
-                    <li key={ev.txHash || i} className="text-sm text-[#3f3a46] flex gap-2 items-start justify-between">
-                      <span className="min-w-0">{d.text}</span>
-                      {ev.txHash && (
-                        <a
-                          href={txUrl(ev.txHash)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0"
-                          title="View transaction on explorer"
-                        >
-                          ↗
-                        </a>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                  ))}
+                </ul>
+                {activityRows.length > ACTIVITY_PREVIEW && (
+                  <button
+                    onClick={() => setShowAllActivity(true)}
+                    className="mt-3 text-xs text-[#6b6470] hover:text-[#c9a15c] transition-colors"
+                  >
+                    View all {activityRows.length} →
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
       </div>
+
+      {/* Full-activity modal — same overlay pattern as the dashboard's create
+          modal: backdrop click or × closes; the list scrolls, lines wrap. */}
+      {showAllActivity && (
+        <div
+          className="fixed inset-0 z-[200] bg-[#0b0b0e]/50 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setShowAllActivity(false); }}
+        >
+          <div className="bg-[#faf9f6] rounded-[28px] shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div className="px-7 pt-6 pb-4 flex items-center justify-between gap-4 border-b border-[#e6e2d9]/80">
+              <Eyebrow>Recent activity</Eyebrow>
+              <button
+                onClick={() => setShowAllActivity(false)}
+                className="text-[#6b6470] hover:text-[#0b0b0e] transition-colors text-xl leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <ul className="px-7 py-5 space-y-3 overflow-y-auto">
+              {activityRows.map(row => (
+                <li key={row.key} className="text-sm text-[#3f3a46] flex gap-2 items-start justify-between">
+                  <span className="min-w-0">{row.text}</span>
+                  {row.txHash && (
+                    <a href={txUrl(row.txHash)} target="_blank" rel="noopener noreferrer" className="text-[#6b6470] hover:text-[#c9a15c] transition-colors shrink-0" title="View transaction on explorer">↗</a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
     </AuthGate>
   );
