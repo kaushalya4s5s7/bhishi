@@ -364,12 +364,86 @@ STABLE=0x... PYTH_ENTROPY=0x825c0390f379C631f3Cf11A82a37D20BddF93c07 \
 forge script script/SeedDemo.s.sol --rpc-url monad_testnet --broadcast
 ```
 
-## Invariants Proven
+## Installs as an app (PWA)
 
-- **Conservation**: `balance == totalClaimable + dustAccrued + undrawnPools + stakedBonds` — holds across 128,000 state transitions, in both LUCKY_DRAW and AUCTION mode (two separate invariant suites)
-- **Winner-default unprofitability**: defaulter after winning has net gain ≤ 0 (fuzz: 256 runs)
-- **Fake circle can't mint reputation**: `NotFactoryCircle` revert enforced by registry
-- **Pot never shrinks (Design A)**: `undrawnPools == contribution × seats` after every round's commit phase, even with past winners in the circle — regression-tested in `test/Auction.t.sol` (`test_potIsFullEveryRoundWithPastWinners`, `test_round2BidUpTo40PctOfFullPoolAccepted`) and verified live on-chain above
+Bhishi is a full Progressive Web App, so a ROSCA — a fundamentally *mobile*,
+recurring, deadline-driven habit — lives on the home screen instead of a bookmark.
+
+- **Installable** — `manifest.webmanifest` (`display: standalone`, maskable icons,
+  portrait, screenshots) → "Add to Home Screen" on Android/iOS, a real window on
+  desktop. Launches to `/dashboard`, no browser chrome.
+- **Works offline** — a hand-written service worker ([`sw.js`](apps/web/public/sw.js))
+  pre-caches the app shell and serves navigations **network-first, then cache,
+  then an `/offline` page**. It deliberately **never intercepts RPC or API calls**
+  (cross-origin / non-navigation requests pass straight through) — so a stale
+  cache can never feed you wrong chain data.
+- **Push reminders** — a ROSCA fails on missed deadlines, so Web Push (VAPID)
+  delivers commit/reveal-window reminders to the device even when the app is
+  closed. One subscription row per device; the notify worker fans out to
+  web-push, email, and WhatsApp.
+- **Device-aware UX** — responsive layout, safe-area insets, theme-color for the
+  OS status bar, and gasless smart-account transactions so a phone user with zero
+  native tokens can still join and pay.
+
+## Security — what I hardened, and where
+
+Custody of real value means the threat model came first, not last. Layer by layer:
+
+**Contract (the money layer)**
+- **No custody escape hatch** — there is no `withdraw`, `owner`, `admin`, or
+  upgrade path. Even the deployer cannot touch a circle's funds (proven: CUSTODY).
+- **Reentrancy** — every fund-moving function is `nonReentrant` and follows
+  strict **checks-effects-interactions** (state written before any external
+  transfer); a dedicated `ReentrancyHarness` test attacks the path.
+- **Safe token handling** — `SafeERC20` throughout; a reverted transfer can't be
+  silently treated as success.
+- **Clone hijack prevention** — the implementation is `initialized`-locked so no
+  one can initialize it as a rogue circle; each clone has isolated storage.
+- **Randomness integrity** — draw callbacks are accepted **only** from the real
+  Pyth Entropy address; no human, including us, can influence a winner.
+- **Registry gating** — only factory-deployed circles in `COMPLETED` state can
+  write reputation, each `(circle, member)` once — fake circles revert
+  `NotFactoryCircle` (proven on-chain above).
+- **Liveness / anti-griefing** — permissionless `slash()`, `advanceToReveal()`,
+  `requestDraw()`, `reclaimOnStall()` mean no single actor can freeze a round or
+  strand funds; bond sizing is proven to make post-win default unprofitable.
+
+**App / API layer**
+- **Server-verified identity** — every protected route verifies the Privy access
+  token server-side (`PrivyAuthGuard`); the acting wallet is read from the
+  verified session, **never** trusted from the request body.
+- **Rate limiting** — `@nestjs/throttler` on mutating endpoints (invites, etc.).
+- **Sponsorship is bounded** — the relayer only ever tops up the *caller's own*
+  verified smart account, with a per-user daily cap (anti-drain).
+- **No trust in the cache** — anything security-relevant (creator checks, balances,
+  phase) is re-read from chain, so a poisoned or lagging DB can't authorize an action.
+- **Secrets never leave the device** — commit-reveal salts are client-side only;
+  the chain stores just the hash.
+
+## Tests — 78 across 16 suites, `forge test` green
+
+Not a happy-path demo — the suite is built around the failure modes that lose money.
+
+| Kind | Count | What it covers |
+|---|---|---|
+| **Invariant** (stateful fuzz) | **2 suites — 128k calls each** | Conservation (`balance == claimable + dust + undrawn + bonds`) holds across 256 randomized runs × 128,000 state transitions, in **both** modes |
+| **Fuzz** | 1 | Post-win default is unprofitable for *any* bond/round combination (256 runs) |
+| **Unit + integration** | ~75 | one suite per risk surface (below) |
+
+Each suite targets a specific way money could go wrong:
+
+`Custody` (no withdraw) · `Fairness` (only Pyth sets the winner) · `Slashing` +
+`SlashFSM` (default → bond slashed, round auto-advances) · `WinnerDefault`
+(default-after-win unprofitable) · `ReclaimOnStall` (VRF-silence recovery) ·
+`ReentrancyHarness` (attack the transfer path) · `FakeCircleAttest`
+(fake circle can't mint reputation) · `CommitReveal` / `Auction` (sealed-bid +
+the Design-A shrinking-pot regression) · `Filling` / `FillingTimeout` (join +
+abort-refund) · `VrfSponsorship` (circle self-funds draws) ·
+`CircleFactory` / `ConservationInv` / `MockStable`.
+
+```bash
+cd packages/contracts && forge test        # 78 passing
+```
 
 ## Tech Stack
 
