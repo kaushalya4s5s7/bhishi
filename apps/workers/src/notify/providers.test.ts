@@ -59,6 +59,20 @@ describe('WebPushProvider (via pushProvider)', () => {
     expect(res.ok).toBe(false);
   });
 
+  it('does not prune on a non-404/410 error and reports the failure detail', async () => {
+    findManyMock.mockResolvedValue([
+      { endpoint: 'https://push.example/flaky', p256dh: 'p', auth: 'a' },
+    ]);
+    sendNotificationMock.mockRejectedValue({ statusCode: 500, message: 'push service unavailable' });
+    const { pushProvider } = await import('./providers.js');
+
+    const res = await pushProvider.send('0xabc', 'subject', 'body');
+
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('500');
+  });
+
   it('succeeds and does not prune when at least one subscription sends successfully', async () => {
     findManyMock.mockResolvedValue([
       { endpoint: 'https://push.example/alive', p256dh: 'p', auth: 'a' },

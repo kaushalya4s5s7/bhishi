@@ -144,6 +144,7 @@ class WebPushProvider implements NotifyProvider {
 
     const payload = JSON.stringify({ title: subject, body, url: '/dashboard' });
     let anyOk = false;
+    const errors: string[] = [];
     for (const s of subs) {
       try {
         await webpush.sendNotification(
@@ -152,14 +153,18 @@ class WebPushProvider implements NotifyProvider {
         );
         anyOk = true;
       } catch (e: unknown) {
-        const status = (e as { statusCode?: number }).statusCode;
+        const status = typeof e === 'object' && e !== null && 'statusCode' in e ? (e as { statusCode?: number }).statusCode : undefined;
         // 404/410 = subscription gone; prune it so we stop trying.
         if (status === 404 || status === 410) {
           await prisma.pushSubscription.deleteMany({ where: { endpoint: s.endpoint } });
+        } else {
+          const message = e instanceof Error ? e.message : String(e);
+          logger.warn({ provider: this.name, to, endpoint: s.endpoint, status, message }, 'push send failed');
+          errors.push(status ? `${status}: ${message}` : message);
         }
       }
     }
-    return anyOk ? { ok: true } : { ok: false, error: 'all push sends failed' };
+    return anyOk ? { ok: true } : { ok: false, error: errors.join('; ') || 'all push sends failed' };
   }
 }
 
