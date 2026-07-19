@@ -22,6 +22,10 @@ export interface CircleSummary {
   memberCount: number;
   contribution: string;
   mode: 'LUCKY_DRAW' | 'AUCTION';
+  // 0-indexed round the circle is currently on. Total rounds in a cycle equals
+  // `seats` (every member wins exactly once). Optional so an older cached
+  // summary without it degrades gracefully.
+  currentRound?: number;
 }
 
 interface CircleCardProps {
@@ -86,6 +90,14 @@ export function CircleCard({ circle, userAddress }: CircleCardProps) {
   // Pot for the round = seats × contribution (what a winner takes).
   const pot = (Number(contribution) / 1e6) * seats;
 
+  // Round progress. A full cycle is `seats` rounds (each member wins once).
+  // currentRound is 0-indexed: while active, rounds completed = currentRound;
+  // once COMPLETED, all `seats` rounds are done. Only meaningful once the
+  // circle has left FILLING (rounds haven't started during filling).
+  const roundsDone =
+    stateName === 'COMPLETED' ? seats : Math.min(circle.currentRound ?? 0, seats);
+  const cycleStarted = stateName !== 'FILLING' && stateName !== 'ABORTED_FILLING';
+
   return (
     <Link href={actionHref} className="group block">
       <div className="rounded-2xl bg-white shadow-sm p-5 h-full transition-transform group-hover:-translate-y-0.5 hover:shadow-md">
@@ -106,6 +118,9 @@ export function CircleCard({ circle, userAddress }: CircleCardProps) {
         <div className="flex items-center justify-between pt-4 border-t border-[#f0ede4]">
           <span className="font-mono text-xs text-[#6b6470]">
             {MODE_LABEL[mode] ?? 'Circle'}
+            {cycleStarted && (
+              <span className="text-[#c9a15c]"> · {roundsDone}/{seats} rounds done</span>
+            )}
           </span>
           <span className={`text-sm font-semibold inline-flex items-center gap-1.5 ${claimable > 0n ? 'text-[#c9a15c]' : 'text-[#0b0b0e]'}`}>
             {actionLabel} <span aria-hidden>→</span>

@@ -69,6 +69,13 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // settles — without mistaking a PAST win (hasWon stays true forever) for a
   // fresh one. -1 = never observed winning yet.
   const [myWinRound, setMyWinRound] = useState<number>(-1);
+  // Round for which we have CONFIRMED (via a live chain read) that THIS user
+  // has committed. "committed" is monotonic within a round — once true it can
+  // only be reset by the round actually advancing — but a raw per-poll read can
+  // momentarily return zero: a lagging RPC node one block behind, or a
+  // transient read failure. Recording the round here lets us treat "committed"
+  // as sticky for that round so the UI never flickers commit-form ⇄ committed.
+  const committedRoundRef = useRef<number>(-1);
 
   const [state, setState] = useState<number | null>(null);
   const [mode, setMode] = useState<'LUCKY_DRAW' | 'AUCTION'>('LUCKY_DRAW');
@@ -82,7 +89,10 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   const [contribution, setContribution] = useState<bigint>(0n);
   const [bond, setBond] = useState<bigint>(0n);
   const [balance, setBalance] = useState<bigint>(0n);
-  const [commitOf, setCommitOf] = useState<string>('0x' + '0'.repeat(64));
+  // Authoritative "has THIS user committed in the current round" — read from
+  // the contract's `committed(address)` boolean, which IS reset to false each
+  // round for non-winners. This is what drives hasCommitted.
+  const [committedFlag, setCommittedFlag] = useState(false);
   const [claimable, setClaimable] = useState<bigint>(0n);
   const [revealed, setRevealed] = useState(false);
   const [round, setRound] = useState<number>(0);
@@ -261,19 +271,46 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         }
       } catch { /* transient RPC — keep prior wonMembers */ }
 
-      let nextCommitOf: string = '0x' + '0'.repeat(64);
+      // Whether THIS user has committed in the current round (authoritative
+      // `committed` boolean). Sticky-within-round below to defeat flicker.
+      let nextCommitted = false;
+      // True when the committed read was inconclusive (failed, or a genuine
+      // false after we've already confirmed a commit this round via a lagging
+      // node) — hold the prior value instead of regressing to "not committed".
+      let nextCommittedResolvedLater = false;
       let nextClaimable = 0n;
       let nextBalance = 0n;
       let nextRevealed = false;
+      const liveRoundNum = Number(roundVal);
       if (userAddress) {
-        const [ch, info, bal, hasRevealed] = await Promise.all([
-          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'commitmentOf', args: [userAddress] }).catch(() => '0x' + '0'.repeat(64)),
+        const READ_FAILED = '__failed__';
+        const [committedRaw, info, bal, hasRevealed] = await Promise.all([
+          // committed: THE authoritative "committed this round" flag — reset to
+          // false each round for non-winners by the contract. (commitmentOf is
+          // NOT read: the contract never clears it on round advance, so it
+          // would hold a stale prior-round hash and wrongly read as committed.)
+          publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'committed', args: [userAddress] }).catch(() => READ_FAILED),
           // memberInfo returns (joined, stakedBond, contribution, claimable)
           publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberInfo', args: [userAddress] }).catch(() => [false, 0n, 0n, 0n]),
           stableBalance(userAddress).catch(() => 0n),
           publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'revealed', args: [userAddress] }).catch(() => false),
         ]);
-        nextCommitOf = ch as string;
+        // If the round moved on, the previous round's "committed" no longer
+        // applies — clear the sticky marker so the fresh round starts clean.
+        if (committedRoundRef.current !== -1 && committedRoundRef.current !== liveRoundNum) {
+          committedRoundRef.current = -1;
+        }
+        if (committedRaw !== READ_FAILED) {
+          nextCommitted = Boolean(committedRaw);
+          // First confirmed commit for this round → mark it sticky.
+          if (nextCommitted) committedRoundRef.current = liveRoundNum;
+        }
+        // Inconclusive if the read failed, OR came back false while we've
+        // already confirmed a commit for this round (lagging RPC node). Resolve
+        // against the TRUE prior value in the functional setter below.
+        const committedReadFailed = committedRaw === READ_FAILED;
+        const staleFalse = !nextCommitted && committedRoundRef.current === liveRoundNum;
+        nextCommittedResolvedLater = committedReadFailed || staleFalse;
         nextClaimable = BigInt((info as any)[3] ?? 0n);
         nextBalance = bal;
         nextRevealed = Boolean(hasRevealed);
@@ -292,7 +329,11 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
       setState(Number(stateVal));
       setRound(Number(roundVal));
       setMembers(memberList);
-      setCommitOf(nextCommitOf);
+      // Functional updater so the sticky decision resolves against the ACTUAL
+      // current value (loadLive's deps don't include committedFlag, so its
+      // closure copy can be stale). Inconclusive poll → keep prior; otherwise
+      // take the fresh read.
+      setCommittedFlag(prev => (nextCommittedResolvedLater ? prev : nextCommitted));
       setClaimable(nextClaimable);
       setBalance(nextBalance);
       setRevealed(nextRevealed);
@@ -616,9 +657,19 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     userAddress &&
     lastWinnerAddress!.toLowerCase() !== userAddress.toLowerCase();
   const isMember = members.some(m => m.toLowerCase() === userAddress?.toLowerCase());
-  const hasCommitted = commitOf !== '0x' + '0'.repeat(64);
+  // Authoritative: the contract's `committed` boolean (reset each round),
+  // NOT commitmentOf (which persists stale across rounds).
+  const hasCommitted = committedFlag;
   const pot = (Number(contribution) / 1e6) * seats;
   const isAuction = mode === 'AUCTION';
+
+  // Round progress. A full cycle is `seats` rounds — every member wins exactly
+  // once. `round` (currentRound) is 0-indexed: the round in progress is
+  // round+1, and rounds completed so far equals `round` (or all `seats` once
+  // the circle is COMPLETED). Only meaningful once the cycle has started.
+  const cycleStarted = stateName !== 'FILLING' && stateName !== 'ABORTED_FILLING';
+  const roundsDone = stateName === 'COMPLETED' ? seats : Math.min(round, seats);
+  const activeRoundNo = Math.min(round + 1, seats); // 1-indexed round in progress
 
   // AUCTION bid derivations. The bid (discount) is capped at 40% of this
   // round's pool (Circle.sol MAX_BID_DISCOUNT_BPS). The on-chain `roundPool`
@@ -741,7 +792,13 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
           </h1>
           <div className="flex items-center gap-3 mt-3">
             <PhaseBadge phase={phaseForBadge} />
-            {round > 0 && <span className="font-mono text-xs text-[#6b6470]">Round {round}</span>}
+            {cycleStarted && (
+              <span className="font-mono text-xs text-[#6b6470]">
+                {stateName === 'COMPLETED'
+                  ? `All ${seats} rounds complete`
+                  : `Round ${activeRoundNo} of ${seats} · ${roundsDone}/${seats} done`}
+              </span>
+            )}
           </div>
         </div>
         <button onClick={() => refresh()} className="text-sm text-[#6b6470] hover:text-[#0b0b0e] border border-[#e6e2d9] hover:border-[#0b0b0e] px-3 py-1.5 rounded-full transition-colors bg-white shadow-sm">
@@ -802,6 +859,18 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
             <SeatRing filled={members.length} total={seats} />
             <div className="mt-4 text-sm text-[#6b6470]">
               Contribution <span className="font-medium text-[#0b0b0e]">{(Number(contribution) / 1e6).toFixed(2)} mUSDC</span> / round
+            </div>
+            <div className="mt-1.5 text-sm text-[#6b6470]">
+              {/* Full cycle length = seats: every member wins exactly one round. */}
+              Cycle length{' '}
+              <span className="font-medium text-[#0b0b0e]">{seats} rounds</span>
+              {' '}— one per member
+              {cycleStarted && (
+                <>
+                  {' · '}
+                  <span className="font-medium text-[#0b0b0e]">{roundsDone}/{seats} done</span>
+                </>
+              )}
             </div>
           </div>
 
