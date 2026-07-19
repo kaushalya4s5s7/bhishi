@@ -32,6 +32,7 @@ self.addEventListener('fetch', (e) => {
 });
 
 self.addEventListener('push', (e) => {
+  // e.data?.text() below: an empty push event carries no data payload at all.
   const data = (() => { try { return e.data.json(); } catch { return { title: 'Bhishi', body: e.data?.text() ?? '' }; } })();
   e.waitUntil(
     self.registration.showNotification(data.title || 'Bhishi', {
@@ -45,11 +46,14 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = e.notification.data?.url || '/dashboard';
+  const target = new URL(e.notification.data?.url || '/dashboard', self.location.origin);
+  if (target.origin !== self.location.origin) return; // never navigate cross-origin from a push payload
+
   e.waitUntil(
     self.clients.matchAll({ type: 'window' }).then((cs) => {
-      const hit = cs.find((c) => c.url.includes(url));
-      return hit ? hit.focus() : self.clients.openWindow(url);
+      const hit = cs.find((c) => new URL(c.url).pathname === target.pathname);
+      if (hit) return 'navigate' in hit ? hit.navigate(target.href).then((c) => c.focus()) : hit.focus();
+      return self.clients.openWindow(target.href);
     }),
   );
 });
