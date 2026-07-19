@@ -9,7 +9,7 @@ import { computeCommitment, secretToSalt, checkRevealWillSucceed } from '@/lib/c
 import { ensureStableAllowance, stableBalance } from '@/lib/erc20';
 import { claimFaucet } from '@/lib/faucet';
 import { apiUrl } from '@/lib/api';
-import { fetchCircleDetail } from '@/lib/circle';
+import { fetchCircleDetail, type RoundBidRow, type CircleRoundRow } from '@/lib/circle';
 import { confirmTransaction } from '@/lib/transactions';
 import { formatTxError } from '@/lib/txError';
 import { validateInvite, consumeInvite, type ValidateResult } from '@/lib/invites';
@@ -103,9 +103,6 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // AUCTION only: the discount (in whole mUSDC) the member bids — how much of
   // the pot they'll forgo to win it early. Empty in LUCKY_DRAW (unused there).
   const [bid, setBid] = useState('');
-  // This round's pot (sum of contributions), read live — used to show and
-  // enforce the 40%-of-pot bid cap (Circle.sol MAX_BID_DISCOUNT_BPS = 4000).
-  const [roundPool, setRoundPool] = useState<bigint>(0n);
   const [computedHash, setComputedHash] = useState<string | null>(null);
   const [events, setEvents] = useState<{ name: string; args: Record<string, any>; blockNumber: bigint; txHash: string }[]>([]);
   // Optimistic feed entries for the user's OWN just-confirmed actions. The
@@ -114,6 +111,8 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // wouldn't see their own commit/reveal/claim in "Recent activity" for a
   // while. Each entry drops itself once the indexed feed contains its txHash.
   const [pendingEvents, setPendingEvents] = useState<{ name: string; txHash: string; member?: string }[]>([]);
+  const [roundBids, setRoundBids] = useState<RoundBidRow[]>([]);
+  const [rounds, setRounds] = useState<CircleRoundRow[]>([]);
 
   // A pending entry is one of the USER'S OWN just-confirmed actions, so its
   // actor is always this wallet. We record it (as `member`) alongside the name
@@ -170,6 +169,8 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         txHash: e.txHash ?? '',
       }));
       setEvents(indexed);
+      setRoundBids(detail.roundBids ?? []);
+      setRounds(detail.rounds ?? []);
       // Drop any optimistic entry the indexer has now caught up on.
       const indexedHashes = new Set(indexed.map(e => e.txHash.toLowerCase()));
       setPendingEvents(prev => prev.filter(p => !indexedHashes.has(p.txHash.toLowerCase())));
@@ -191,11 +192,10 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
   // from loadFromApi(), this only corrects/sharpens it.
   const loadLive = useCallback(async () => {
     try {
-      const [stateVal, memberCountVal, roundVal, roundPoolVal, bondVal, seatsVal, contributionVal] = await Promise.all([
+      const [stateVal, memberCountVal, roundVal, bondVal, seatsVal, contributionVal] = await Promise.all([
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'state' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'memberCount' }),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'currentRound' }).catch(() => 0),
-        publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'roundPool' }).catch(() => 0n),
         // bond/seats/contribution are immutable circle config, but everything
         // the user ACTS on depends on them (join approves `bond`; the UI shows
         // seats and per-round contribution). If the indexer hasn't caught this
@@ -207,7 +207,6 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'seats' }).catch(() => null),
         publicClient.readContract({ address: circleAddress, abi: circleAbi as any, functionName: 'contribution' }).catch(() => null),
       ]);
-      setRoundPool(BigInt(roundPoolVal as any));
       if (bondVal !== null) setBond(BigInt(bondVal as any));
       if (seatsVal !== null) setSeats(Number(seatsVal as any));
       if (contributionVal !== null) setContribution(BigInt(contributionVal as any));
@@ -673,16 +672,24 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
 
   // AUCTION bid derivations. The bid (discount) is capped at 40% of this
   // round's pool (Circle.sol MAX_BID_DISCOUNT_BPS). The on-chain `roundPool`
-  // is built up incrementally as members commit — during the COMMIT phase (when
-  // the bid is typed) it can still be 0, which would make the cap 0 and reject
-  // every bid. So we cap against the FULL pool the round converges to:
-  // contribution × seats. We take the larger of the live pool and the full-pool
-  // estimate so the cap is never below what the contract will ultimately enforce
-  // at reveal. `bidUnits` is the on-chain 6-decimal value; the `amount`
-  // committed/revealed must be identical at commit and reveal.
+  // The contract enforces the bid cap at REVEAL as 40% × roundPool, where
+  // roundPool is the total contributions collected that round. Every member
+  // (including past winners, who pay but don't bid) contributes once per round,
+  // so the round always converges to contribution × seats. We cap against that
+  // FINAL pool — NOT max(live roundPool, fullPool). The old max() could inflate
+  // the cap using a transient/larger roundPool (or, in a round where a past
+  // winner hadn't paid, overstate it), letting a member commit a bid the
+  // contract then rejects with BidExceedsCap at reveal — an un-revealable,
+  // slashable bid. Capping strictly on the final full pool never overstates.
+  // Cap = 40% of the FINAL round pool. With the Design-A contract fix, every
+  // member (past winners included — they pay but don't bid) contributes once
+  // per round, so roundPool always converges to contribution × seats by reveal
+  // time. Capping on that full pool matches the contract's reveal-time check
+  // exactly and never overstates, while keeping the cap stable as members
+  // commit (unlike capping on the still-growing live roundPool, which would
+  // reject valid bids typed before everyone has committed).
   const fullPoolUnits = contribution * BigInt(seats);
-  const capBaseUnits = roundPool > fullPoolUnits ? roundPool : fullPoolUnits;
-  const maxBidUnits = (capBaseUnits * 4000n) / 10000n; // 40% of the pool, in base units
+  const maxBidUnits = (fullPoolUnits * 4000n) / 10000n; // 40% of the full pool
   const maxBidMusdc = Number(maxBidUnits) / 1e6;
   const bidNum = bid.trim() === '' ? NaN : Number(bid);
   const bidUnits = Number.isFinite(bidNum) ? BigInt(Math.round(bidNum * 1e6)) : 0n;
@@ -738,6 +745,26 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
         return { actor: '', text: name };
     }
   }
+
+  // Group revealed bids by round for the persistent history table. Only rounds
+  // that have a winner (ended) are shown — never live/sealed bids. Ascending.
+  const bidHistory = (() => {
+    const byRound = new Map<number, RoundBidRow[]>();
+    for (const b of roundBids) {
+      const arr = byRound.get(b.roundNumber) ?? [];
+      arr.push(b);
+      byRound.set(b.roundNumber, arr);
+    }
+    // A round is "ended" if the indexer recorded a winner for it (rounds[] has
+    // winner set) OR any bid row for it is marked won.
+    const endedRounds = new Set(
+      rounds.filter(r => r.winner).map(r => r.roundNumber),
+    );
+    return [...byRound.entries()]
+      .filter(([rn, bids]) => endedRounds.has(rn) || bids.some(b => b.won))
+      .sort((a, b) => a[0] - b[0])
+      .map(([roundNumber, bids]) => ({ roundNumber, bids }));
+  })();
 
   return (
     <AuthGate
@@ -1194,6 +1221,40 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
               </ul>
             )}
           </div>
+
+          {/* Round results — persistent per-round bid history */}
+          {bidHistory.length > 0 && (
+            <div className="rounded-2xl bg-white shadow-sm p-6">
+              <Eyebrow muted>Round results</Eyebrow>
+              <div className="mt-4 space-y-4">
+                {bidHistory.map(({ roundNumber, bids }) => (
+                  <div key={roundNumber}>
+                    <div className="text-xs font-mono text-[#6b6470] mb-1.5">Round {roundNumber + 1}</div>
+                    <ul className="space-y-1">
+                      {bids.map(b => {
+                        const isYou = userAddress && b.member.toLowerCase() === userAddress.toLowerCase();
+                        const label = memberLabel(profiles[b.member.toLowerCase()], b.member);
+                        const isPastWinnerZero = b.bid === '0' && !b.won;
+                        return (
+                          <li key={b.member} className="flex items-center justify-between text-sm">
+                            <span className="truncate text-[#0b0b0e]">
+                              {isYou ? 'You' : label}
+                            </span>
+                            <span className={b.won ? 'text-[#c9a15c] font-semibold' : 'text-[#6b6470]'}>
+                              {isPastWinnerZero
+                                ? 'paid · no bid'
+                                : `${(Number(b.bid) / 1e6).toFixed(2)} mUSDC`}
+                              {b.won && ' · WON'}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Event feed */}
           {(events.length > 0 || pendingEvents.length > 0) && (

@@ -9,5 +9,5 @@ export const circleAbi = circleAbiJson as typeof circleAbiJson;
 export const reputationRegistryAbi = reputationRegistryAbiJson as typeof reputationRegistryAbiJson;
 export const mockStableAbi = mockStableAbiJson as typeof mockStableAbiJson;
 
-export { addresses } from "./addresses";
+export { addresses } from "./addresses.js";
 export type { Abi } from "viem";

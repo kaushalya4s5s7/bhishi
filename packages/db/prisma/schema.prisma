@@ -54,10 +54,11 @@ model Circle {
   /// per-circle watermark, so a restart resumes instead of re-scanning.
   lastIndexedBlock BigInt  @default(0)
 
-  members Member[]
-  rounds  Round[]
-  events  ChainEvent[]
-  invites Invite[]
+  members  Member[]
+  rounds   Round[]
+  roundBids RoundBid[]
+  events   ChainEvent[]
+  invites  Invite[]
 
   @@index([state])
   @@index([creator])
@@ -96,6 +97,25 @@ model Round {
 
   @@unique([circleAddress, roundNumber])
   @@index([phase])
+}
+
+/// One member's revealed bid in one round of one circle. Append-only; populated
+/// from the Revealed event (which now carries the bid). Enables the persistent
+/// per-round bid-history table. Only ever holds already-revealed (public) bids.
+model RoundBid {
+  id            String   @id @default(cuid())
+  circle        Circle   @relation(fields: [circleAddress], references: [address], onDelete: Cascade)
+  circleAddress String
+  roundNumber   Int
+  member        String
+  /// Revealed bid discount in token base units (0 for LUCKY_DRAW / past winners).
+  bid           Decimal  @db.Decimal(78, 0)
+  /// Set true once WinnerDrawn names this member as the round's winner.
+  won           Boolean  @default(false)
+  revealedAt    DateTime
+
+  @@unique([circleAddress, roundNumber, member])
+  @@index([circleAddress, roundNumber])
 }
 
 /// Append-only audit trail of every Circle event we've observed.

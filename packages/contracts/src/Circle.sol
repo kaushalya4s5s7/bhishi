@@ -131,7 +131,7 @@ contract Circle is ReentrancyGuard, IEntropyConsumer {
     event FillingRefunded(uint256 memberCount);
     event RoundStarted(uint256 indexed round, uint256 roundStart);
     event Committed(address indexed member, uint256 indexed round);
-    event Revealed(address indexed member, uint256 indexed round);
+    event Revealed(address indexed member, uint256 indexed round, uint256 bid);
     event Slashed(address indexed defaulter, uint256 bondSlashed, uint256 redistributed);
     event DrawReady(uint256 indexed round);
     event Claimed(address indexed member, uint256 amount);
@@ -257,6 +257,19 @@ contract Circle is ReentrancyGuard, IEntropyConsumer {
         commitmentOf[msg.sender] = commitment;
         roundPool               += contribution;
 
+        // AUCTION past winners ("prized subscribers") keep PAYING every round
+        // but can never bid or win again. They pay by committing here; they do
+        // NOT reveal. Auto-mark them revealed with a zero bid so the
+        // all-revealed gate isn't blocked waiting on a reveal they'll never send
+        // and they can't be slashed for a missing reveal. Their `commitment`
+        // value is irrelevant (never checked, since they skip reveal()).
+        if (mode == Mode.AUCTION && hasWon[msg.sender]) {
+            revealed[msg.sender]    = true;
+            bidDiscount[msg.sender] = 0;
+            revealCount++;
+            emit Revealed(msg.sender, currentRound, 0);
+        }
+
         emit Committed(msg.sender, currentRound);
 
         // Pull contribution
@@ -288,6 +301,10 @@ contract Circle is ReentrancyGuard, IEntropyConsumer {
         if (!memberInfo[msg.sender].joined) revert NotMember();
         if (!committed[msg.sender]) revert NotCommitted();
         if (revealed[msg.sender]) revert AlreadyRevealed();
+        // Past winners are auto-revealed at commit() and cannot bid; they must
+        // never reach the bidding path. (Defensive: they're already revealed,
+        // so the guard above also catches them.)
+        if (mode == Mode.AUCTION && hasWon[msg.sender]) revert AlreadyRevealed();
 
         bytes32 expected = keccak256(abi.encodePacked(amount, salt, msg.sender));
         if (expected != commitmentOf[msg.sender]) revert InvalidReveal();
@@ -307,7 +324,7 @@ contract Circle is ReentrancyGuard, IEntropyConsumer {
         revealed[msg.sender] = true;
         revealCount++;
 
-        emit Revealed(msg.sender, currentRound);
+        emit Revealed(msg.sender, currentRound, mode == Mode.AUCTION ? amount : 0);
 
         // Check if all active members have revealed → advance to DRAW
         _checkAllRevealed();
@@ -614,21 +631,14 @@ contract Circle is ReentrancyGuard, IEntropyConsumer {
             currentRound++;
             drawRequestedAt = 0;
             revealCount = 0;
+            // Reset EVERY member for the new round — past winners included.
+            // They must actively commit (pay) again; the auto-reveal for winners
+            // now happens in commit(), only after they've paid this round.
             for (uint256 i = 0; i < n; i++) {
                 address m = members[i];
-                if (mode == Mode.AUCTION && hasWon[m]) {
-                    // Past winners ("prized subscribers") are permanently excluded
-                    // from bidding — auto-advance them so the all-committed/
-                    // all-revealed checks aren't blocked waiting on them.
-                    committed[m]   = true;
-                    revealed[m]    = true;
-                    bidDiscount[m] = 0;
-                    revealCount++;
-                } else {
-                    committed[m]   = false;
-                    revealed[m]    = false;
-                    bidDiscount[m] = 0; // clear any stale bid from a prior round
-                }
+                committed[m]   = false;
+                revealed[m]    = false;
+                bidDiscount[m] = 0;
             }
             roundStart = block.timestamp;
             state = State.COMMIT;

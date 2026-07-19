@@ -10,8 +10,8 @@ node_modules/
 .turbo/
 
 # foundry build artifacts
-out/
-cache/
+packages/contracts/out/
+packages/contracts/cache/
 
 # misc
 *.log

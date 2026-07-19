@@ -1,0 +1,62 @@
+{
+  "mode": "lucky_draw",
+  "circle": "0xc2c970a2af9b06844221b02976a78360fdffb93c",
+  "members": [
+    "0x790EC28eb670BABe66AD8278183356000f006C5D",
+    "0xb0b5d3bE309BfC627Ebd9F5E532592B6B2b51CD1",
+    "0x1A1Ef8da90362d4cd8b8f3C27294F267258d5047"
+  ],
+  "finalState": 7,
+  "log": [
+    {
+      "step": "requestDraw",
+      "tx": "0x6c140143e4f33a9cc86229ddb3a805e467e0f6b18451e6fc3646cef5ed13e2ce"
+    },
+    {
+      "step": "Pyth fulfilment (WinnerDrawn)",
+      "tx": "0x1b2cb710ed20e3266af75708e0cb9a5f436551df87badb887a0e9b81cde97eff"
+    },
+    {
+      "step": "commit",
+      "who": "member0",
+      "tx": "0x483deca8a152f2c0ff73679087d0dcb7881dc10189de565fabae0c08bb0945ab"
+    },
+    {
+      "step": "commit",
+      "who": "member1",
+      "tx": "0x67c9c533f7047510b56fb931d5345da24850f840521195d459d4591e87c12b48"
+    },
+    {
+      "step": "commit",
+      "who": "member2",
+      "tx": "0x73622cac87791d8908e072b3b828b6864cead4addb64fae47d7de0a8afdd5e44"
+    },
+    {
+      "step": "advanceToReveal",
+      "tx": "0x61d50bfa8431390302c3163c7ece99effe203002452c1348c664fc4d46cf1ad6"
+    },
+    {
+      "step": "reveal",
+      "who": "member0",
+      "tx": "0xc9c5c0063e0803c58a2480e929a82a4a7bd08125243e9f2d73bc2e3743014f48"
+    },
+    {
+      "step": "reveal",
+      "who": "member1",
+      "tx": "0xf65f2df46b5494815e1808500f1668693605b9e172db797f8e3cfe938432d4d7"
+    },
+    {
+      "step": "reveal",
+      "who": "member2",
+      "tx": "0x50a72bd2c5671a49716a7739ca79230612a55262e1b5edfb28740de43d300222"
+    },
+    {
+      "step": "requestDraw",
+      "tx": "0xae3af88e7d6b844aadc78529adaa05a638be2f4a0d14a48a632d28656e0d7036"
+    },
+    {
+      "step": "Pyth fulfilment (WinnerDrawn)",
+      "tx": "0xc9b2af133ccd1f5589fa0b47b12e733e522a3f77305f872ebf78cae86bcd67e8"
+    }
+  ]
+}

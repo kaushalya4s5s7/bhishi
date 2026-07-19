@@ -13,13 +13,27 @@ export function pushSupported(): boolean {
   return typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && Boolean(VAPID);
 }
 
+/** Outcome of an enablePush() attempt. The caller uses this to give the user
+ *  a specific, actionable message instead of silently reverting the button. */
+export type EnablePushResult =
+  | 'enabled'       // subscribed and persisted — done
+  | 'unsupported'   // this browser can't do web push (or VAPID missing)
+  | 'denied'        // user blocked notifications (needs browser settings to undo)
+  | 'dismissed'     // user closed the prompt without choosing — retry is fine
+  | 'error';        // subscribe/network/API failure — retry is fine
+
 /** Ask permission, subscribe via the active SW, and persist to the API.
- *  Returns true on success. Safe to call repeatedly. */
-export async function enablePush(token: string | null): Promise<boolean> {
-  if (!pushSupported()) return false;
+ *  Returns a structured outcome so the UI can explain what happened.
+ *  Safe to call repeatedly. */
+export async function enablePush(token: string | null): Promise<EnablePushResult> {
+  if (!pushSupported()) return 'unsupported';
   try {
     const perm = await Notification.requestPermission();
-    if (perm !== 'granted') return false;
+    if (perm !== 'granted') {
+      // 'denied' = actively blocked (sticky; only browser settings can undo).
+      // 'default' = the user dismissed the prompt without choosing — retryable.
+      return perm === 'denied' ? 'denied' : 'dismissed';
+    }
 
     const reg = await navigator.serviceWorker.ready;
     const sub =
@@ -35,9 +49,9 @@ export async function enablePush(token: string | null): Promise<boolean> {
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ endpoint: sub.endpoint, p256dh: json.keys!.p256dh, auth: json.keys!.auth }),
     });
-    return res.ok;
+    return res.ok ? 'enabled' : 'error';
   } catch {
-    // Subscribe/network failure is non-fatal — the caller just stays un-subscribed.
-    return false;
+    // Subscribe/network failure is non-fatal — surface it so the user can retry.
+    return 'error';
   }
 }

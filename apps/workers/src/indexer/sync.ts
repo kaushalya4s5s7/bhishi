@@ -278,7 +278,30 @@ async function applyEvent(
         create: { circleAddress, roundNumber: round, phase: 'DRAW', winner: winner ?? null },
         update: { winner: winner ?? null },
       });
+      if (winner) {
+        // Flag the winner's bid row for this round so the history table can mark it.
+        await prisma.roundBid.updateMany({
+          where: { circleAddress, roundNumber: round, member: winner },
+          data: { won: true },
+        });
+      }
       if (winner) await notifyMember(winner, 'payout_received', { circle: circleAddress, round }, dedupeId);
+      return;
+    }
+    case 'Revealed': {
+      const member = str(args.member);
+      const round = Number(args.round ?? 0);
+      const bid = String(args.bid ?? 0);
+      if (!member) return;
+      await prisma.roundBid.upsert({
+        where: {
+          circleAddress_roundNumber_member: {
+            circleAddress, roundNumber: round, member,
+          },
+        },
+        create: { circleAddress, roundNumber: round, member, bid, revealedAt: new Date() },
+        update: { bid },
+      });
       return;
     }
     case 'Slashed': {

@@ -1,0 +1,89 @@
+{
+  "mode": "auction",
+  "circle": "0xc27967918b15232f95b3bac464ed43a36c181e2e",
+  "members": [
+    "0x189545c7FE28DDF68A93fc5Ca0b646b46757e8A7",
+    "0x57aAF437352512D54dCcfc8001841969C8C7D867",
+    "0x807Fbbc7aaAf95A67a89A6550b8Fb694111de160"
+  ],
+  "finalState": 7,
+  "log": [
+    {
+      "step": "requestDraw",
+      "tx": "0x511b1fb5c137fe99d7fd32131f824ce57eb25c80c7e466e81fb3c1b9f6f9ca9e"
+    },
+    {
+      "step": "Pyth fulfilment (WinnerDrawn)",
+      "tx": "0x27a59d0b1a739e6aff95d68d457b709ea14ce1e087d58ecf12e0c3e2021e90c6"
+    },
+    {
+      "step": "commit",
+      "who": "member0",
+      "tx": "0xc91c2bbe22816522bd527fc3d25bfca33530dbdcc1f44dfb8308da5cb14133a5"
+    },
+    {
+      "step": "commit",
+      "who": "member1",
+      "tx": "0xc9019d3366ddbab32d21cb69a092aeb55f131d69d489753f929906bf02a81579"
+    },
+    {
+      "step": "commit",
+      "who": "member2",
+      "tx": "0x8a073d69b6f21291c902200fb309708c7a0311d578c6a3760d68f1f897899ba3"
+    },
+    {
+      "step": "advanceToReveal",
+      "tx": "0x5b5aa4eeb5796a08745f339f8bf79f84f51de2b8846c055773e7f5a6ea726f7a"
+    },
+    {
+      "step": "reveal",
+      "who": "member0",
+      "tx": "0x1527b37bc213956d53bfa5d95a6b57d35d09cc9061a8104d6df45a59f8d40992"
+    },
+    {
+      "step": "reveal",
+      "who": "member1",
+      "tx": "0xb45c17e91f6b55fceb6f68368af3a42fdce4e592a6b6c0695cdb04c40932ad90"
+    },
+    {
+      "step": "requestDraw",
+      "tx": "0xf976ae2aa6e878cd391cdb430451d7030dea07c261106e34bc3f4ffb8bad1b38"
+    },
+    {
+      "step": "Pyth fulfilment (WinnerDrawn)",
+      "tx": "0x82c5acc21549f11a137f3811271d4b38a93054cff18eac2d94c0b58bb93f8de8"
+    },
+    {
+      "step": "commit",
+      "who": "member0",
+      "tx": "0x619af70ed54beb81c89435f50a691f0bbfad21c9bb7e96dc4b1d4ef8b27ebac1"
+    },
+    {
+      "step": "commit",
+      "who": "member1",
+      "tx": "0x0a01a46f4a6610abc52a984edf0b431fa25784b9555099ffb7a9fc07156c5b0f"
+    },
+    {
+      "step": "commit",
+      "who": "member2",
+      "tx": "0xbcbc77b06782c13e8f835db71654191c07bfed12beacc776546f52fe005a8455"
+    },
+    {
+      "step": "advanceToReveal",
+      "tx": "0x7ef72755107fbbc085e1d7f0e499d623b67e94f62f36f42f48a6595d794278b6"
+    },
+    {
+      "step": "reveal",
+      "who": "member0",
+      "tx": "0x0a835ff1e8639e84e5637b67eb81aab189f190ac2e4f0ca1b943c35af5a97781"
+    },
+    {
+      "step": "requestDraw",
+      "tx": "0xf47d52e97e103172369442bba17038b2f3f651c4c3648b7511c228c6ad812b4c"
+    },
+    {
+      "step": "Pyth fulfilment (WinnerDrawn)",
+      "tx": "0xffea400620a454283197fb8c140d5f8be850dbf7f7487fb32f6f3f1b9383766f"
+    }
+  ]
+}

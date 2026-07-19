@@ -43,9 +43,10 @@ contract AuctionTest is Test, VrfFixture {
         vm.prank(who); circle.join();
     }
 
-    /// @notice A member who has already won must be auto-marked committed+revealed
-    ///         at the start of a later round (they are excluded from bidding).
-    function test_pastWinnerAutoAdvancedNextRound() public {
+    /// @notice A member who has already won must NOT be auto-committed at the
+    ///         start of a later round — they must pay again. Once they commit
+    ///         (pay), they are auto-revealed with a forced zero bid.
+    function test_pastWinnerMustPayButAutoRevealsOnCommit() public {
         Circle circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.AUCTION)));
         _fundAndJoin(circle, alice);
         _fundAndJoin(circle, bob);
@@ -72,9 +73,16 @@ contract AuctionTest is Test, VrfFixture {
         else if (circle.hasWon(bob)) r0Winner = bob;
         else r0Winner = carol;
 
-        assertTrue(circle.committed(r0Winner), "past winner should be auto-committed");
-        assertTrue(circle.revealed(r0Winner), "past winner should be auto-revealed");
-        assertEq(circle.bidDiscount(r0Winner), 0, "past winner's auto-bid must be zero");
+        // Past winner must NOT be auto-committed anymore — they must pay again.
+        assertFalse(circle.committed(r0Winner), "winner must commit (pay) each round");
+        assertFalse(circle.revealed(r0Winner), "winner not revealed until they commit");
+        // After the winner commits (pays), they ARE auto-revealed with bid 0.
+        deal(address(stable), r0Winner, CONTRIB);
+        vm.prank(r0Winner); stable.approve(address(circle), type(uint256).max);
+        vm.prank(r0Winner); circle.commit(keccak256(abi.encodePacked(uint256(0), bytes32("x"), r0Winner)));
+        assertTrue(circle.committed(r0Winner), "winner committed after paying");
+        assertTrue(circle.revealed(r0Winner), "winner auto-revealed on commit");
+        assertEq(circle.bidDiscount(r0Winner), 0, "winner bid forced to 0");
     }
 
     /// @notice In AUCTION mode, reveal() validates a bid discount (not the
@@ -236,14 +244,13 @@ contract AuctionTest is Test, VrfFixture {
         for (uint256 round = 0; round < 2; round++) {
             for (uint256 i = 0; i < 3; i++) {
                 address who = ppl[i];
-                if (circle.hasWon(who)) continue;
                 bytes32 salt = bytes32(uint256(round * 10 + i));
                 vm.prank(who); circle.commit(keccak256(abi.encodePacked(uint256(0), salt, who)));
             }
             circle.advanceToReveal();
             for (uint256 i = 0; i < 3; i++) {
                 address who = ppl[i];
-                if (circle.hasWon(who)) continue;
+                if (circle.hasWon(who)) continue; // past winners auto-revealed at commit()
                 bytes32 salt = bytes32(uint256(round * 10 + i));
                 vm.prank(who); circle.reveal(0, salt);
             }
@@ -260,6 +267,12 @@ contract AuctionTest is Test, VrfFixture {
         assertEq(uint256(circle.state()), uint256(Circle.State.COMMIT));
 
         bytes32 saltFinal = "final";
+        for (uint256 i = 0; i < 3; i++) {
+            address who = ppl[i];
+            if (who == lastBidder) continue;
+            bytes32 salt = bytes32(uint256(900 + i));
+            vm.prank(who); circle.commit(keccak256(abi.encodePacked(uint256(0), salt, who)));
+        }
         vm.prank(lastBidder); circle.commit(keccak256(abi.encodePacked(uint256(30e6), saltFinal, lastBidder)));
         circle.advanceToReveal();
         vm.prank(lastBidder); circle.reveal(30e6, saltFinal);
@@ -285,17 +298,18 @@ contract AuctionTest is Test, VrfFixture {
         for (uint256 round = 0; round < SEATS; round++) {
             for (uint256 i = 0; i < 3; i++) {
                 address who = ppl[i];
-                if (circle.hasWon(who)) continue; // auto-advanced, already committed/revealed
                 bytes32 salt = bytes32(uint256(round * 10 + i));
                 vm.prank(who); circle.commit(keccak256(abi.encodePacked(bids[i], salt, who)));
             }
             circle.advanceToReveal();
             for (uint256 i = 0; i < 3; i++) {
                 address who = ppl[i];
-                if (circle.hasWon(who)) continue;
+                if (circle.hasWon(who)) continue; // past winners auto-revealed at commit()
                 bytes32 salt = bytes32(uint256(round * 10 + i));
                 vm.prank(who); circle.reveal(bids[i], salt);
             }
+            // Pot must be the FULL pool every round now (winners keep paying).
+            assertEq(circle.undrawnPools(), CONTRIB * SEATS, "pot must stay full each round");
             circle.requestDraw();
             vrf.fulfillLatest(address(circle), uint256(keccak256(abi.encodePacked(round))));
 
@@ -316,5 +330,132 @@ contract AuctionTest is Test, VrfFixture {
         assertTrue(circle.hasWon(alice));
         assertTrue(circle.hasWon(bob));
         assertTrue(circle.hasWon(carol));
+    }
+
+    /// @notice Direct regression test for the shrinking-pot bug: with a past
+    ///         winner in the circle, the round-1 pot must still be the FULL
+    ///         contribution × seats, not contribution × (seats - 1).
+    function test_potIsFullEveryRoundWithPastWinners() public {
+        Circle circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.AUCTION)));
+        _fundAndJoin(circle, alice);
+        _fundAndJoin(circle, bob);
+        _fundAndJoin(circle, carol);
+
+        bytes32 saltA = "saltA"; bytes32 saltB = "saltB"; bytes32 saltC = "saltC";
+        vm.prank(alice); circle.commit(keccak256(abi.encodePacked(uint256(0), saltA, alice)));
+        vm.prank(bob);   circle.commit(keccak256(abi.encodePacked(uint256(0), saltB, bob)));
+        vm.prank(carol); circle.commit(keccak256(abi.encodePacked(uint256(0), saltC, carol)));
+        circle.advanceToReveal();
+        vm.prank(alice); circle.reveal(0, saltA);
+        vm.prank(bob);   circle.reveal(0, saltB);
+        vm.prank(carol); circle.reveal(0, saltC);
+        circle.requestDraw();
+        vrf.fulfillLatest(address(circle), 42);
+
+        address[3] memory ppl = [alice, bob, carol];
+        for (uint256 i = 0; i < 3; i++) {
+            address who = ppl[i];
+            bytes32 salt = bytes32(uint256(100 + i));
+            vm.prank(who); circle.commit(keccak256(abi.encodePacked(uint256(0), salt, who)));
+        }
+        circle.advanceToReveal();
+        assertEq(circle.undrawnPools(), CONTRIB * SEATS, "pot must be full even with a past winner");
+    }
+
+    /// @notice The real-world failing case: a 3x10 circle where round 1's cap
+    ///         (40% of the full pool) must accept a 10e6 bid, which previously
+    ///         reverted BidExceedsCap because the pot had shrunk.
+    function test_round2BidUpTo40PctOfFullPoolAccepted() public {
+        uint256 contrib = 10e6;
+        uint256 bond = (SEATS - 1) * contrib;
+        Circle circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(contrib, SEATS, bond, Mode.AUCTION)));
+        _fundAndJoin(circle, alice);
+        _fundAndJoin(circle, bob);
+        _fundAndJoin(circle, carol);
+
+        bytes32 saltA = "saltA"; bytes32 saltB = "saltB"; bytes32 saltC = "saltC";
+        vm.prank(alice); circle.commit(keccak256(abi.encodePacked(uint256(0), saltA, alice)));
+        vm.prank(bob);   circle.commit(keccak256(abi.encodePacked(uint256(0), saltB, bob)));
+        vm.prank(carol); circle.commit(keccak256(abi.encodePacked(uint256(0), saltC, carol)));
+        circle.advanceToReveal();
+        vm.prank(alice); circle.reveal(0, saltA);
+        vm.prank(bob);   circle.reveal(0, saltB);
+        vm.prank(carol); circle.reveal(0, saltC);
+        circle.requestDraw();
+        vrf.fulfillLatest(address(circle), 42);
+
+        address[3] memory ppl = [alice, bob, carol];
+        address winner;
+        for (uint256 i = 0; i < 3; i++) if (circle.hasWon(ppl[i])) winner = ppl[i];
+        address nonWinner = winner == alice ? bob : alice;
+        address other = (winner != carol && nonWinner != carol) ? carol : bob;
+
+        for (uint256 i = 0; i < 3; i++) {
+            address who = ppl[i];
+            bytes32 salt = bytes32(uint256(200 + i));
+            uint256 bidAmt = who == nonWinner ? 10e6 : (who == other ? 12e6 : 0);
+            vm.prank(who); circle.commit(keccak256(abi.encodePacked(bidAmt, salt, who)));
+        }
+        circle.advanceToReveal();
+
+        vm.prank(nonWinner);
+        circle.reveal(10e6, bytes32(uint256(200 + _idx(ppl, nonWinner))));
+        assertEq(circle.bidDiscount(nonWinner), 10e6, "10e6 bid must be accepted against the full pool");
+
+        vm.prank(other);
+        circle.reveal(12e6, bytes32(uint256(200 + _idx(ppl, other))));
+        assertEq(circle.bidDiscount(other), 12e6, "bid exactly at cap must be accepted");
+    }
+
+    function _idx(address[3] memory ppl, address who) internal pure returns (uint256) {
+        for (uint256 i = 0; i < 3; i++) if (ppl[i] == who) return i;
+        revert("not found");
+    }
+
+    /// @notice A round-1 winner who does not commit (pay) is slashable exactly
+    ///         like any other defaulting member — their bond is consumed and
+    ///         redistributed, and they are removed from the circle.
+    function test_winnerWhoDoesNotPayIsSlashable() public {
+        Circle circle = Circle(payable(factory.createCircle{value: VRF_BUDGET}(CONTRIB, SEATS, BOND, Mode.AUCTION)));
+        _fundAndJoin(circle, alice);
+        _fundAndJoin(circle, bob);
+        _fundAndJoin(circle, carol);
+
+        bytes32 saltA = "saltA"; bytes32 saltB = "saltB"; bytes32 saltC = "saltC";
+        vm.prank(alice); circle.commit(keccak256(abi.encodePacked(uint256(0), saltA, alice)));
+        vm.prank(bob);   circle.commit(keccak256(abi.encodePacked(uint256(0), saltB, bob)));
+        vm.prank(carol); circle.commit(keccak256(abi.encodePacked(uint256(0), saltC, carol)));
+        circle.advanceToReveal();
+        vm.prank(alice); circle.reveal(0, saltA);
+        vm.prank(bob);   circle.reveal(0, saltB);
+        vm.prank(carol); circle.reveal(0, saltC);
+        circle.requestDraw();
+        vrf.fulfillLatest(address(circle), 42);
+
+        address[3] memory ppl = [alice, bob, carol];
+        address winner;
+        for (uint256 i = 0; i < 3; i++) if (circle.hasWon(ppl[i])) winner = ppl[i];
+
+        // Non-winners commit and reveal; winner never commits.
+        for (uint256 i = 0; i < 3; i++) {
+            address who = ppl[i];
+            if (who == winner) continue;
+            bytes32 salt = bytes32(uint256(300 + i));
+            vm.prank(who); circle.commit(keccak256(abi.encodePacked(uint256(0), salt, who)));
+        }
+        // Winner did not commit, so advanceToReveal must revert until they do —
+        // instead, force the round into REVEAL via slash's own commit-phase
+        // handling: slash() requires REVEAL phase timing via roundStart, so we
+        // cannot advance to REVEAL without the winner's commit. Advance the
+        // clock and slash the winner directly out of COMMIT phase instead.
+        vm.warp(block.timestamp + circle.REVEAL_WINDOW() + 1);
+
+        (, uint256 bondBefore,,) = circle.memberInfo(winner);
+        assertGt(bondBefore, 0);
+
+        circle.slash(winner);
+
+        (bool joinedAfter,,,) = circle.memberInfo(winner);
+        assertFalse(joinedAfter, "non-paying winner should be removed via slash");
     }
 }

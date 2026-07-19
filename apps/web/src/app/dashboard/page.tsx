@@ -56,7 +56,7 @@ export default function DashboardPage() {
   // Active vs completed split, and average seat-fill for each — the two
   // real, indexer-backed percentages that stand in for the reference's
   // "Prioritized/Additional tasks" gradient stat cards.
-  const { activeCircles, completedCircles, activeFillPct, completedFillPct } = useMemo(() => {
+  const { activeCircles, completedCircles, activeFillPct } = useMemo(() => {
     const active = circles.filter(c => !DONE_STATES.has(c.state));
     const completed = circles.filter(c => DONE_STATES.has(c.state));
     const avgFill = (list: CircleSummary[]) =>
@@ -65,13 +65,21 @@ export default function DashboardPage() {
       activeCircles: active,
       completedCircles: completed,
       activeFillPct: avgFill(active),
-      completedFillPct: avgFill(completed),
     };
   }, [circles]);
 
   const totalPot = useMemo(
     () => circles.reduce((sum, c) => sum + (Number(c.contribution) / 1e6) * c.seats, 0),
     [circles],
+  );
+
+  // Total mUSDC distributed across the circles that have fully completed —
+  // a real, meaningful figure for the "Completed" card. (Avg-seats-filled is
+  // ~100% for any completed circle, so it conveyed nothing; a count + total
+  // value distributed is the actual signal.) Pot per circle = seats × contribution.
+  const completedPot = useMemo(
+    () => completedCircles.reduce((sum, c) => sum + (Number(c.contribution) / 1e6) * c.seats, 0),
+    [completedCircles],
   );
 
   return (
@@ -144,8 +152,19 @@ export default function DashboardPage() {
                   <span className="w-9 h-9 rounded-full bg-white/60 grid place-items-center text-sm" aria-hidden>◷</span>
                 </div>
                 <div>
-                  <p className="font-display font-semibold text-4xl">{loaded ? `${activeFillPct}%` : '—'}</p>
-                  <p className="text-xs text-[#0b0b0e]/60 mt-1">Avg. seats filled &middot; {activeCircles.length} circle{activeCircles.length === 1 ? '' : 's'}</p>
+                  {!loaded ? (
+                    <p className="font-display font-semibold text-4xl">—</p>
+                  ) : activeCircles.length === 0 ? (
+                    <>
+                      <p className="font-display font-semibold text-4xl">None active</p>
+                      <p className="text-xs text-[#0b0b0e]/60 mt-1">Join or start a circle to begin</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-display font-semibold text-4xl">{activeFillPct}%</p>
+                      <p className="text-xs text-[#0b0b0e]/60 mt-1">Avg. seats filled &middot; {activeCircles.length} circle{activeCircles.length === 1 ? '' : 's'}</p>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -156,8 +175,24 @@ export default function DashboardPage() {
                   <span className="w-9 h-9 rounded-full bg-white/60 grid place-items-center text-sm" aria-hidden>✓</span>
                 </div>
                 <div>
-                  <p className="font-display font-semibold text-4xl">{loaded ? `${completedFillPct}%` : '—'}</p>
-                  <p className="text-xs text-[#0b0b0e]/60 mt-1">Avg. seats filled &middot; {completedCircles.length} circle{completedCircles.length === 1 ? '' : 's'}</p>
+                  {!loaded ? (
+                    <p className="font-display font-semibold text-4xl">—</p>
+                  ) : completedCircles.length === 0 ? (
+                    <>
+                      <p className="font-display font-semibold text-4xl">None yet</p>
+                      <p className="text-xs text-[#0b0b0e]/60 mt-1">Circles you finish will show here</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-display font-semibold text-4xl">
+                        {completedCircles.length}
+                        <span className="text-lg font-medium text-[#0b0b0e]/60"> done</span>
+                      </p>
+                      <p className="text-xs text-[#0b0b0e]/60 mt-1">
+                        {completedPot.toFixed(0)} mUSDC distributed
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

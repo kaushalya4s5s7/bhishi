@@ -16,6 +16,15 @@ export interface CircleRoundRow {
   drawRequestedAt: string | null;
 }
 
+/** One member's revealed bid in one completed round (from the indexer). */
+export interface RoundBidRow {
+  roundNumber: number;
+  member: string;
+  bid: string;        // base units (6 decimals)
+  won: boolean;
+  revealedAt: string;
+}
+
 /**
  * Full circle detail, served from Postgres by the indexer (~40ms) instead of
  * 3+ sequential Monad-RPC round-trips (~1.5s each). This is the same indexed
@@ -38,6 +47,7 @@ export interface CircleDetail {
   currentRound: number;
   members: CircleMemberRow[];
   rounds: CircleRoundRow[];
+  roundBids: RoundBidRow[];
 }
 
 /** Fetch a circle's indexed detail. Throws on network/HTTP error. */

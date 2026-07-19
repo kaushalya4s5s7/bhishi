@@ -65,6 +65,7 @@ export class CirclesService {
       include: {
         members: { orderBy: { joinedAt: 'asc' } },
         rounds: { orderBy: { roundNumber: 'asc' } },
+        roundBids: { orderBy: [{ roundNumber: 'asc' }, { revealedAt: 'asc' }] },
       },
     });
     if (!circle) throw new NotFoundException(`Circle ${address} not indexed`);
@@ -73,6 +74,7 @@ export class CirclesService {
       ...serialize(circle),
       members: circle.members.map(serialize),
       rounds: circle.rounds.map(serialize),
+      roundBids: circle.roundBids.map(serialize),
     };
   }
 
