@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type { UserProfile } from '@bhishi/db';
+import { Prisma, type UserProfile } from '@bhishi/db';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { VerifiedUser } from '../auth/privy.service.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
@@ -58,20 +58,35 @@ export class ProfilesService {
       });
     }
 
-    return this.prisma.userProfile.upsert({
-      where: { walletAddress },
-      create: {
-        walletAddress,
-        privyUserId: user.userId,
-        email: user.email ?? null,
-      },
-      update: {
-        lastSeenAt: new Date(),
-        // Back-fill identity fields if they were missing before.
-        privyUserId: user.userId,
-        ...(user.email ? { email: user.email } : {}),
-      },
-    });
+    try {
+      return await this.prisma.userProfile.upsert({
+        where: { walletAddress },
+        create: {
+          walletAddress,
+          privyUserId: user.userId,
+          email: user.email ?? null,
+        },
+        update: {
+          lastSeenAt: new Date(),
+          // Back-fill identity fields if they were missing before.
+          privyUserId: user.userId,
+          ...(user.email ? { email: user.email } : {}),
+        },
+      });
+    } catch (e) {
+      // TOCTOU: two concurrent sign-ins for the same Privy user (e.g. the
+      // embedded-wallet call and the smart-account call racing, per the
+      // docstring above) can both pass the findUnique(privyUserId) check
+      // above with no existing row, then both try to CREATE — the second
+      // one's create collides on the privyUserId unique constraint even
+      // though upsert()'s own atomicity only covers the walletAddress key.
+      // The loser here just re-reads: the winner's row is what should exist.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const winner = await this.prisma.userProfile.findUnique({ where: { privyUserId: user.userId } });
+        if (winner) return winner;
+      }
+      throw e;
+    }
   }
 
   /** Read a profile by wallet address; returns null if none exists. */

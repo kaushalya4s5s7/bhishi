@@ -55,36 +55,49 @@ export class TransactionsService {
     if (!receipt) throw new NotFoundException('Transaction not found (not yet mined, or wrong network)');
     if (receipt.status !== 'success') throw new BadRequestException('Transaction did not succeed on-chain');
 
-    // Only the caller's own transaction can be fast-pathed through their own
-    // session — anyone else's tx must go through the indexer like normal.
-    if (receipt.from.toLowerCase() !== callerAddress.toLowerCase()) {
-      throw new BadRequestException('Transaction was not sent by the authenticated caller');
-    }
+    // Authentication note: for a plain EOA tx, receipt.from IS the caller. But
+    // the app's primary path is gasless ERC-4337 — there the mined tx is sent
+    // by the BUNDLER to the ENTRYPOINT, so receipt.from/receipt.to say nothing
+    // about the user. Instead each handler authenticates against the decoded
+    // event's subject (creator/member), which the contract derived from
+    // msg.sender — that's the caller's smart account and can't be spoofed via
+    // someone else's tx hash.
+    const senderIsCaller = receipt.from.toLowerCase() === callerAddress.toLowerCase();
 
-    if (action === 'createCircle') return this.confirmCreateCircle(receipt);
-    return this.confirmCircleAction(receipt, action);
+    if (action === 'createCircle') return this.confirmCreateCircle(receipt, callerAddress, senderIsCaller);
+    return this.confirmCircleAction(receipt, action, callerAddress, senderIsCaller);
   }
 
-  private async confirmCreateCircle(receipt: {
-    to: string | null;
-    logs: Log[];
-    blockNumber: bigint;
-    transactionHash: string;
-  }) {
+  private async confirmCreateCircle(
+    receipt: {
+      to: string | null;
+      logs: Log[];
+      blockNumber: bigint;
+      transactionHash: string;
+    },
+    callerAddress: string,
+    senderIsCaller: boolean,
+  ) {
     const factory = addresses.monadTestnet.factory.toLowerCase();
-    if (receipt.to?.toLowerCase() !== factory) {
-      throw new BadRequestException('Transaction was not sent to the CircleFactory');
-    }
 
-    const created = parseEventLogs({ abi: [circleCreatedEvent], logs: receipt.logs })[0] as
-      | { args: { circle?: `0x${string}`; creator?: `0x${string}` } }
-      | undefined;
+    // Find the CircleCreated event emitted BY the factory. receipt.to can't be
+    // used here: for a UserOp it's the EntryPoint, not the factory. The log's
+    // emitting address is the trustworthy anchor either way.
+    const created = (parseEventLogs({ abi: [circleCreatedEvent], logs: receipt.logs }) as unknown as AnyLog[]).find(
+      (l) => l.address.toLowerCase() === factory,
+    ) as (AnyLog & { args: { circle?: `0x${string}`; creator?: `0x${string}` } }) | undefined;
     if (!created?.args.circle) {
-      throw new BadRequestException('No CircleCreated event in this transaction');
+      throw new BadRequestException('No CircleCreated event from the CircleFactory in this transaction');
     }
 
     const circleAddress = created.args.circle.toLowerCase();
     const creator = (created.args.creator ?? '0x').toLowerCase();
+
+    // The event's creator is the factory's msg.sender — for a UserOp that's
+    // the user's smart account even though receipt.from is the bundler.
+    if (!senderIsCaller && creator !== callerAddress.toLowerCase()) {
+      throw new BadRequestException('Transaction was not sent by the authenticated caller');
+    }
 
     const existing = await prisma.circle.findUnique({ where: { address: circleAddress } });
     if (existing) return { applied: false, reason: 'already-indexed', circleAddress };
@@ -117,17 +130,26 @@ export class TransactionsService {
   private async confirmCircleAction(
     receipt: { to: string | null; logs: Log[] },
     action: Extract<ConfirmableAction, 'join' | 'commit' | 'reveal'>,
+    callerAddress: string,
+    senderIsCaller: boolean,
   ) {
-    const circleAddress = receipt.to?.toLowerCase();
-    if (!circleAddress) throw new BadRequestException('Transaction has no destination contract');
-
-    const circle = await prisma.circle.findUnique({ where: { address: circleAddress } });
-    if (!circle) throw new NotFoundException('Circle not indexed yet — try again shortly');
-
     const decoded = parseEventLogs({ abi: circleAbi, logs: receipt.logs }) as unknown as AnyLog[];
     const wantEvent = action === 'join' ? 'Joined' : action === 'commit' ? 'Committed' : 'Revealed';
-    const match = decoded.find((l) => l.eventName === wantEvent);
-    if (!match) throw new BadRequestException(`No ${wantEvent} event found in this transaction's logs`);
+    // receipt.to is the EntryPoint for UserOps, so the circle's address comes
+    // from the event log's emitting contract, and the caller is authenticated
+    // as the event's member (msg.sender inside the circle).
+    const match = decoded.find(
+      (l) =>
+        l.eventName === wantEvent &&
+        (senderIsCaller ||
+          (typeof (l.args as Record<string, unknown> | undefined)?.member === 'string' &&
+            ((l.args as Record<string, unknown>).member as string).toLowerCase() === callerAddress.toLowerCase())),
+    );
+    if (!match) throw new BadRequestException(`No ${wantEvent} event for the authenticated caller in this transaction's logs`);
+
+    const circleAddress = match.address.toLowerCase();
+    const circle = await prisma.circle.findUnique({ where: { address: circleAddress } });
+    if (!circle) throw new NotFoundException('Circle not indexed yet — try again shortly');
 
     const args = match.args as Record<string, unknown>;
     const member = typeof args.member === 'string' ? args.member.toLowerCase() : undefined;
