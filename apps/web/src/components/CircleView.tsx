@@ -395,6 +395,16 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
     }
   }
 
+  /** Single entry point for the Commit button: derives the hash from the
+   *  current bid/secret inline rather than requiring a separate "compute"
+   *  step, so the UI is one field + one button instead of a field, a
+   *  compute link, a hash callout, and a button all stacked at once. */
+  function doCommit() {
+    const hash = computedHash ?? computeHash();
+    if (!hash) return;
+    doWriteWithApproval('commit', [hash], contribution);
+  }
+
   /**
    * Reveal, but only after locally re-running the contract's own commitment
    * check. A failed reveal isn't just a wasted tx — the member then looks like a
@@ -450,17 +460,20 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
    *  • AUCTION: the amount IS the member's bid discount, so we commit to
    *    `bidUnits`. The member must re-enter the SAME bid + secret at reveal.
    */
-  function computeHash() {
-    if (!userAddress || !secret) return;
+  function computeHash(): `0x${string}` | null {
+    if (!userAddress || !secret) return null;
     if (mode === 'AUCTION' && !bidValid) {
       setTxError(`Enter a bid between 0 and ${maxBidMusdc.toFixed(2)} mUSDC (max 40% of the pot).`);
-      return;
+      return null;
     }
     try {
       const amount = mode === 'AUCTION' ? bidUnits : contribution;
-      setComputedHash(computeCommitment(amount, secret, userAddress));
+      const hash = computeCommitment(amount, secret, userAddress);
+      setComputedHash(hash);
+      return hash;
     } catch {
       setTxError('Invalid secret — must be a whole number');
+      return null;
     }
   }
 
@@ -774,23 +787,17 @@ export function CircleView({ circleAddress, inviteToken }: CircleViewProps) {
                     className={INPUT_CLS}
                   />
                 </div>
-                {secret && (!isAuction || bidValid) && (
-                  <button onClick={computeHash} className="text-sm text-[#c9a15c] border-b border-[#c9a15c] pb-px hover:opacity-70">
-                    Compute commit hash
-                  </button>
-                )}
-                {computedHash && (
-                  <div className="bg-[#f0ead8]/50 border border-[#e6e2d9] rounded-sm p-3">
-                    <div className="font-mono text-[10px] tracking-[0.12em] uppercase text-[#6b6470] mb-1">Commit hash</div>
-                    <div className="font-mono text-xs text-[#0b0b0e] break-all">{computedHash}</div>
-                  </div>
-                )}
                 <Button
-                  onClick={() => computedHash && doWriteWithApproval('commit', [computedHash as `0x${string}`], contribution)}
-                  disabled={txPending || !computedHash}
+                  onClick={doCommit}
+                  disabled={txPending || !secret || (isAuction && !bidValid)}
                 >
                   {txPending ? 'Committing…' : 'Commit'}
                 </Button>
+                {computedHash && (
+                  <p className="font-mono text-[11px] text-[#6b6470] truncate" title={computedHash}>
+                    Hash {computedHash.slice(0, 10)}…{computedHash.slice(-6)}
+                  </p>
+                )}
               </div>
             )
           ) : (
